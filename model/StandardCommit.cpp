@@ -1,13 +1,15 @@
 #include "StandardCommit.h"
 
+#include <utility>
+
 StandardCommit::StandardCommit(
     string author,
     string message,
     string timestamp,
     string commitID
-) : Commit(author, message, timestamp, commitID) {}
+) : Commit(std::move(author), std::move(message), std::move(timestamp), std::move(commitID)) {}
 
-StandardCommit::~StandardCommit() {}
+StandardCommit::~StandardCommit() = default;
 
 void StandardCommit::displayCommit() {}
 

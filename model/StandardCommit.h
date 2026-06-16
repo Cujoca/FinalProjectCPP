@@ -14,7 +14,7 @@ class StandardCommit : public Commit {
             string timestamp,
             string commitID
         );
-        ~StandardCommit();
+        ~StandardCommit() override;
         void displayCommit() override;
         string getSummary() override;
 };

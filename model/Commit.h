@@ -16,7 +16,7 @@ class Commit {
             string timestamp,
             string commitID
         );
-        virtual ~Commit() {}
+        virtual ~Commit() = default;
         virtual void displayCommit() = 0;
         virtual string getSummary() = 0;
 
