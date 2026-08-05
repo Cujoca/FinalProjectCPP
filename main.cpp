@@ -3,86 +3,43 @@
 // Author: Bao Vo
 //
 // This is where the finished pieces of the project are wired together into a
-// runnable program. It connects the model classes (TrackedFile / StandardCommit
-// / Validator, written by Andrei) to the ConsoleView GUI (view/, written by Bao)
-// through a small in-memory RepositorySession.
+// runnable program:
 //
-// INTEGRATION NOTE:
-//   The session below keeps the working files and commit history in memory so
-//   the program is fully runnable today. Once Omer's Repository /
-//   RepositoryManager / DataManager classes are ready, this session is the seam
-//   where they plug in: each menu handler would delegate to Repository instead
-//   of the local containers, and DataManager would persist the history. The
-//   ConsoleView and the menu flow stay exactly the same.
+//   view/ConsoleView          (Bao)   — every character read or printed
+//        |
+//   controller/RepositoryManager (Omer) — the bridge: validates input, drives the
+//        |                                model, and reports what happened
+//   model/Repository, DataManager, DiffEngine, AnalyticsEngine (Omer)
+//   model/TrackedFile, Commit, StandardCommit, Validator       (Andrei)
+//
+// The rule the whole program follows: ConsoleView is the only class that talks
+// to the terminal, and RepositoryManager is the only class main.cpp talks to.
+// Each menu handler below is therefore the same three steps — prompt through the
+// view, call one manager method, hand the manager's message back to the view.
 
-#include <algorithm>
-#include <chrono>
-#include <format>
-#include <functional>
-#include <map>
-#include <sstream>
+#include <iostream>
 #include <string>
-#include <vector>
 
 #include "ConsoleView.h"
-#include "StandardCommit.h"
-#include "TrackedFile.h"
-#include "Validator.h"
+#include "RepositoryManager.h"
 
 using namespace std;
 
-namespace {
-
-// Current wall-clock time as an ISO-8601 "YYYY-MM-DDTHH:MM:SS" string.
-string nowTimestamp() {
-    const auto now = chrono::floor<chrono::seconds>(chrono::system_clock::now());
-    return format("{:%Y-%m-%dT%H:%M:%S}", now);
-}
-
-// A short, stable-ish commit id derived from the commit's content + a counter.
-// Good enough to identify commits in this demo; a real VCS would hash the tree.
-string makeCommitId(int counter, const string& seed) {
-    const size_t h = hash<string>{}(seed + to_string(counter));
-    ostringstream oss;
-    oss << hex << h;
-    const string s = oss.str();
-    return s.substr(0, min<size_t>(7, s.size()));
-}
-
-// Human-readable text for the model's Validator::Error values.
-string errorToString(Error e) {
-    switch (e) {
-        case Error::Empty:         return "value cannot be empty";
-        case Error::TooShort:      return "value is too short (min 3 characters)";
-        case Error::TooLong:       return "value is too long (max 20 characters)";
-        case Error::NoAlpha:       return "value must contain at least one letter";
-        case Error::AlreadyExists: return "value already exists";
-        case Error::InvalidPath:   return "value is not a valid path";
-        case Error::NotExists:     return "value does not exist";
-        default:                   return "invalid value";
-    }
-}
-
-} // namespace
-
 // -------------------------------------------------------------------------
-// RepositorySession — the in-memory integration layer.
+// MiniVCSApp — drives the menu loop.
 // -------------------------------------------------------------------------
-class RepositorySession {
-    ConsoleView view;
-    Validator   validator;
-    string      repoName;
-
-    // path -> file. The file's Status doubles as its stage state
-    // (Modified = working change, Staged = ready to commit, Committed = in history).
-    map<string, TrackedFile> workingFiles;
-    vector<StandardCommit>   history;
-    int commitCounter = 0;
+class MiniVCSApp {
+    ConsoleView       view;
+    RepositoryManager manager;
 
 public:
     void run() {
-        setupRepo();
-        view.showWelcome(repoName);
+        view.showWelcome();
+
+        if (!setupRepo()) {
+            // input closed before a repository existed — nothing to do
+            return;
+        }
 
         bool running = true;
         while (running) {
@@ -91,170 +48,206 @@ public:
             if (!cin) break; // input stream closed (e.g. piped EOF) — exit cleanly
 
             switch (choice) {
-                case 1: addOrUpdateFile(); break;
-                case 2: stageFiles();      break;
-                case 3: showStatus();      break;
-                case 4: commitStaged();    break;
-                case 5: showLog();         break;
-                case 6: showCommitDetail();break;
-                case 0: running = false;   break;
+                case 1:  trackFile();        break;
+                case 2:  createFile();       break;
+                case 3:  stageFiles();       break;
+                case 4:  showStatus();       break;
+                case 5:  commitStaged();     break;
+                case 6:  showLog();          break;
+                case 7:  showCommitDetail(); break;
+                case 8:  showFileContent();  break;
+                case 9:  showDiff();         break;
+                case 10: restoreFile();      break;
+                case 11: refreshFile();      break;
+                case 12: searchCommits();    break;
+                case 13: showStats();        break;
+                case 14: saveRepo();         break;
+                case 15: loadRepo();         break;
+                case 0:  running = false;    break;
                 default: view.showError("Unknown option — please choose a number from the menu.");
             }
         }
-        view.showGoodbye(repoName);
+        view.showGoodbye(manager.getRepositoryName());
     }
 
 private:
-    // Ask for a repository name, validating it with the model's Validator.
-    void setupRepo() {
-        for (int attempt = 0; attempt < 3; ++attempt) {
-            const string name = view.promptLine("Name your repository (3-20 letters): ");
-            if (!cin) break;
-            auto result = validator.validateRepoName(name);
-            if (result) {
-                repoName = *result;
-                return;
-            }
-            view.showError("Invalid name — " + errorToString(result.error()) + ".");
-        }
-        repoName = "my-repo"; // sensible fallback so the program can still run
-        view.showMessage("Using default repository name 'my-repo'.");
+    // Every handler funnels its outcome through here, so a failure always
+    // explains itself in the manager's own words.
+    void report(const bool ok) {
+        if (ok) view.showMessage(manager.lastMessage());
+        else    view.showError(manager.lastMessage());
     }
 
-    void addOrUpdateFile() {
-        const string path = view.promptLine("File path: ");
-        if (path.empty()) {
-            view.showError("A file path is required.");
-            return;
-        }
-        const string content = view.promptLine("File content: ");
+    // Ask for a repository name and path. The manager validates both through the
+    // model's Validator, so this only has to relay the answer.
+    bool setupRepo() {
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            const string name = view.promptLine("Name your repository (3-20 chars): ");
+            if (!cin) return false;
+            const string path = view.promptLine("Repository path (e.g. . or C:\\work\\repo): ");
+            if (!cin) return false;
 
-        auto it = workingFiles.find(path);
-        if (it == workingFiles.end()) {
-            workingFiles.emplace(path, TrackedFile(path, content));
-            view.showMessage("Added '" + path + "' (Modified).");
-        } else {
-            it->second.updateContent(content);
-            it->second.setStatus(Status::Modified);
-            view.showMessage("Updated '" + path + "' (marked Modified).");
+            if (manager.initRepository(name, path)) {
+                view.showMessage(manager.lastMessage());
+                return true;
+            }
+            view.showError(manager.lastMessage());
         }
+
+        // Fall back to something valid so a mistyped setup doesn't end the program.
+        manager.initRepository("my-repo", ".");
+        view.showMessage("Using default repository 'my-repo' at '.'.");
+        return true;
+    }
+
+    void trackFile() {
+        const string path = view.promptLine("File to track (relative to the repository): ");
+        report(manager.addFile(path));
+    }
+
+    void createFile() {
+        const string path = view.promptLine("New file (relative to the repository): ");
+        const string content = view.promptLine("Content (single line): ");
+        report(manager.createAndTrackFile(path, content + "\n"));
     }
 
     void stageFiles() {
-        if (workingFiles.empty()) {
-            view.showError("Nothing to stage — add a file first.");
-            return;
-        }
         const string target = view.promptLine("File path to stage (or 'all'): ");
-
-        int staged = 0;
-        if (target == "all") {
-            for (auto& [path, file] : workingFiles) {
-                if (file.getStatus() == Status::Modified) {
-                    file.setStatus(Status::Staged);
-                    ++staged;
-                }
-            }
-        } else {
-            auto it = workingFiles.find(target);
-            if (it == workingFiles.end()) {
-                view.showError("No tracked file at '" + target + "'.");
-                return;
-            }
-            if (it->second.getStatus() != Status::Modified) {
-                view.showError("'" + target + "' has no modifications to stage.");
-                return;
-            }
-            it->second.setStatus(Status::Staged);
-            ++staged;
-        }
-
-        if (staged == 0) view.showMessage("No modified files to stage.");
-        else             view.showMessage("Staged " + to_string(staged) + " file(s).");
+        if (target == "all") report(manager.stageAllFiles());
+        else                 report(manager.stageFile(target));
     }
 
     void showStatus() {
-        vector<TrackedFile> files;
-        files.reserve(workingFiles.size());
-        for (auto& [path, file] : workingFiles) files.push_back(file);
-        view.showStatus(repoName, files);
+        view.showStatus(manager.getRepositoryName(), manager.getFiles());
     }
 
     void commitStaged() {
-        // A StandardCommit stores a FULL snapshot of every tracked file at commit
-        // time, so start from the previous commit's snapshot and overlay the files
-        // that are staged now. This keeps files from earlier commits present in the
-        // new one instead of each commit only holding its own staged changes.
-        map<string, string> snapshot;
-        if (!history.empty()) snapshot = history.back().getFileSnapshots();
-
-        vector<TrackedFile*> stagedFiles;
-        for (auto& [path, file] : workingFiles) {
-            if (file.getStatus() == Status::Staged) {
-                snapshot[file.getPath()] = file.getContent();
-                stagedFiles.push_back(&file);
-            }
-        }
-        if (stagedFiles.empty()) {
-            view.showError("Nothing staged to commit — use option 2 first.");
+        // Checked before prompting so the user isn't asked for an author and a
+        // message only to be told there was nothing to commit.
+        if (manager.getStagedCount() == 0) {
+            view.showError("Nothing staged to commit — use option 3 first.");
             return;
         }
-
-        const string author = view.promptLine("Author: ");
-        if (author.empty()) {
-            view.showError("An author is required.");
-            return;
-        }
+        const string author  = view.promptLine("Author: ");
         const string message = view.promptLine("Commit message: ");
-        if (message.empty()) {
-            view.showError("A commit message is required.");
-            return;
-        }
-        // NOTE: Validator::validateAuthor / validateMessage are still stubs in the
-        // model, so we do a lightweight non-empty check here for now. Once those
-        // validators are finished this is where they'd be called.
-
-        const string id = makeCommitId(commitCounter, author + message);
-        StandardCommit commit(author, message, nowTimestamp(), id);
-        commit.setFileSnapshots(snapshot);
-
-        history.push_back(commit);
-        ++commitCounter;
-
-        // Move the committed files out of the staging area.
-        for (auto* file : stagedFiles) file->setStatus(Status::Committed);
-
-        view.showMessage("Created commit " + id + " (" +
-                         to_string(stagedFiles.size()) + " staged, " +
-                         to_string(snapshot.size()) + " file(s) in snapshot).");
+        report(manager.commitChanges(message, author));
     }
 
     void showLog() {
-        view.showLog(history);
+        view.showLog(manager.getCommits());
     }
 
     void showCommitDetail() {
-        if (history.empty()) {
-            view.showMessage("No commits yet — nothing to show.");
+        const Commit* commit = promptForCommit("Commit id or number (#): ");
+        if (commit != nullptr) view.showCommitDetail(*commit);
+    }
+
+    void showFileContent() {
+        const string path = view.promptLine("File path: ");
+        string content;
+        if (manager.getFileContent(path, content)) view.showFileContent(path, content);
+        else                                       view.showError(manager.lastMessage());
+    }
+
+    void showDiff() {
+        const Commit* commit = promptForCommit("Compare against which commit (id or #)? ");
+        if (commit == nullptr) return;
+
+        const string path = view.promptLine("File path: ");
+        string diff;
+        if (manager.diffFileAgainstCommit(commit->getCommitID(), path, diff)) {
+            view.showHeading(manager.lastMessage());
+            view.showDiff(diff);
+        } else {
+            view.showError(manager.lastMessage());
+        }
+    }
+
+    void restoreFile() {
+        const Commit* commit = promptForCommit("Restore from which commit (id or #)? ");
+        if (commit == nullptr) return;
+
+        const string path = view.promptLine("File path: ");
+        if (!manager.restoreFile(commit->getCommitID(), path)) {
+            view.showError(manager.lastMessage());
             return;
         }
-        const string key = view.promptLine("Commit id or number (#): ");
+        view.showMessage(manager.lastMessage());
 
-        // Try to match by number first (as shown in the log), then by commit id.
-        for (size_t i = 0; i < history.size(); ++i) {
-            if (key == "#" + to_string(i + 1) ||
-                key == to_string(i + 1) ||
-                key == history[i].getCommitID()) {
-                view.showCommitDetail(history[i]);
-                return;
-            }
+        // The restore updated the repository's tracked copy; writing it out to the
+        // working directory is a separate, explicit step because it overwrites the
+        // file on disk.
+        const string answer = view.promptLine("Write the restored content to disk? (y/n): ");
+        if (answer == "y" || answer == "Y") report(manager.writeFileToDisk(path));
+        else view.showMessage("Left the file on disk untouched.");
+    }
+
+    void refreshFile() {
+        const string path = view.promptLine("File path to re-read from disk: ");
+        report(manager.refreshFile(path));
+    }
+
+    void searchCommits() {
+        const string term = view.promptLine("Search commit summaries for: ");
+        view.showSearchResults(term, manager.searchCommits(term));
+    }
+
+    void showStats() {
+        view.showStats(manager.getRepositoryName(),
+                       manager.getTotalCommits(),
+                       manager.getTrackedFileCount(),
+                       manager.getStagedCount(),
+                       manager.getMostModifiedFile());
+    }
+
+    void saveRepo() {
+        const string file = view.promptLine("Save to file [minivcs.dat]: ");
+        report(manager.saveRepository(file.empty() ? "minivcs.dat" : file));
+    }
+
+    void loadRepo() {
+        const string file = view.promptLine("Load from file [minivcs.dat]: ");
+        report(manager.loadRepository(file.empty() ? "minivcs.dat" : file));
+    }
+
+    // Resolves what the user typed to a commit, accepting either a commit id or
+    // the "#N" row number shown in the log. Reports the failure itself and
+    // returns nullptr when nothing matches.
+    const Commit* promptForCommit(const string& prompt) {
+        const auto& commits = manager.getCommits();
+        if (commits.empty()) {
+            view.showMessage("No commits yet — nothing to show.");
+            return nullptr;
         }
+
+        string key = view.promptLine(prompt);
+        if (key.empty()) {
+            view.showError("A commit id or number is required.");
+            return nullptr;
+        }
+
+        // exact commit id wins
+        if (const Commit* found = manager.findCommit(key)) return found;
+
+        // otherwise treat it as the row number from the log ("#2" or "2")
+        if (key.front() == '#') key.erase(0, 1);
+        try {
+            size_t pos = 0;
+            const int index = stoi(key, &pos);
+            if (pos == key.size() && index >= 1 && index <= static_cast<int>(commits.size())) {
+                return commits[index - 1].get();
+            }
+        } catch (...) {
+            // not a number — fall through to the error below
+        }
+
         view.showError("No commit matching '" + key + "'.");
+        return nullptr;
     }
 };
 
 int main() {
-    RepositorySession session;
-    session.run();
+    MiniVCSApp app;
+    app.run();
     return 0;
 }

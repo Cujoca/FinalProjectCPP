@@ -25,11 +25,11 @@ class StandardCommit : public Commit {
         );
 
         ~StandardCommit() override;
-        void displayCommit() override;
+        void displayCommit() const override;
         // TODO: currently is exact same as base class, should implement to consider extra info in concrete class
         string getSummary() const override;
 
-        map<string, string> getFileSnapshots() { return fileSnapshots; };
+        const map<string, string>& getFileSnapshots() const { return fileSnapshots; };
         void setFileSnapshots(const map<string, string> &nFileSnapshots) { fileSnapshots = nFileSnapshots; };
 };
 

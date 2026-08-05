@@ -2,6 +2,7 @@
 #define TRACKEDFILE_H
 
 #include "string"
+#include <ostream>
 using namespace std;
 
 // Simple enum denoting a TrackedFile's status
@@ -50,8 +51,10 @@ public:
     void   displayFileInfo() const;
 
     // getters
-    string getPath()         { return path; }
-    string getContent()      { return content; }
+    // NOTE: const so a TrackedFile can be read through a const reference — the view
+    // and the analytics engine both inspect files without copying them.
+    const string& getPath()    const { return path; }
+    const string& getContent() const { return content; }
     int    getSize() const   { return size; }
     Status getStatus() const { return status; }
 

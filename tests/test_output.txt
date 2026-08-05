@@ -137,5 +137,298 @@
 === ConsoleView: formatCommitSummary matches the commit's own getSummary ===
 [PASS] s.find(c.getSummary()) != string::npos
 
+=== Validator: validateRepoName - all-whitespace name is empty, not a crash ===
+[PASS] !result.has_value()
+[PASS] result.error() == Error::Empty
+
+=== Validator: validateRepoName - padding does not rescue a short name ===
+[PASS] !result.has_value()
+[PASS] result.error() == Error::TooShort
+
+=== Validator: validateRepoPath - accepts relative and POSIX paths ===
+[PASS] v.validateRepoPath(".").has_value()
+[PASS] v.validateRepoPath("tests/tmp_test_files").has_value()
+[PASS] v.validateRepoPath("/home/me/repo").has_value()
+
+=== Validator: validateRepoPath - accepts a Windows absolute path ===
+[PASS] result.has_value()
+
+=== Validator: validateRepoPath - rejects empty and illegal characters ===
+[PASS] !empty.has_value()
+[PASS] empty.error() == Error::Empty
+[PASS] !illegal.has_value()
+[PASS] illegal.error() == Error::InvalidPath
+
+=== Validator: validateAuthor ===
+[PASS] ok.has_value()
+[PASS] ok.value() == "Bao Vo"
+[PASS] !empty.has_value()
+[PASS] empty.error() == Error::Empty
+[PASS] !digits.has_value()
+[PASS] digits.error() == Error::NoAlpha
+
+=== Validator: validateMessage ===
+[PASS] ok.has_value()
+[PASS] ok.value() == "Fix the parser"
+[PASS] !empty.has_value()
+[PASS] empty.error() == Error::Empty
+[PASS] !tooLong.has_value()
+[PASS] tooLong.error() == Error::TooLong
+
+=== Validator: validateCommitID ===
+[PASS] v.validateCommitID("3").has_value()
+[PASS] v.validateCommitID("a1b2c3d").has_value()
+[PASS] !v.validateCommitID("").has_value()
+[PASS] !v.validateCommitID("has space").has_value()
+
+=== DiffEngine: identical content reports no differences ===
+[PASS] diff.computeDiff("same\n", "same\n") == "No differences found"
+[PASS] diff.computeDiff("", "") == "No differences found"
+
+=== DiffEngine: an added line is marked with + ===
+[PASS] out.find("+ two") != string::npos
+[PASS] out.find("1 line(s) added") != string::npos
+[PASS] out.find("0 line(s) removed") != string::npos
+
+=== DiffEngine: a removed line is marked with - ===
+[PASS] out.find("- two") != string::npos
+[PASS] out.find("1 line(s) removed") != string::npos
+
+=== DiffEngine: unchanged lines are kept as context ===
+[PASS] out.find("    keep") != string::npos
+[PASS] out.find("- old") != string::npos
+[PASS] out.find("+ new") != string::npos
+
+=== DiffEngine: CRLF and LF versions of the same text match ===
+[PASS] diff.computeDiff("a\r\nb\r\n", "a\nb\n").find("0 line(s) added") != string::npos
+
+=== Repository: starts uninitialized and refuses work ===
+[PASS] !repo.isInitialized()
+[PASS] !repo.addFile("anything.txt")
+[PASS] !repo.stageFile("anything.txt")
+[PASS] !repo.commitChanges("msg", "author")
+
+=== Repository: initRepository rejects empty name or path ===
+[PASS] !repo.initRepository("", "path")
+[PASS] !repo.initRepository("name", "")
+[PASS] repo.initRepository("name", "path")
+[PASS] repo.isInitialized()
+[PASS] repo.getRepositoryName() == "name"
+[PASS] repo.getRepPath() == "path"
+
+=== Repository: addFile reads content off disk ===
+[PASS] repo.addFile(tmpPath("alpha.txt"))
+[PASS] repo.getFiles().size() == 1
+[PASS] repo.getFiles()[0].getContent() == "hello\nworld\n"
+[PASS] repo.getFiles()[0].getStatus() == Status::Modified
+
+=== Repository: addFile refuses duplicates and missing files ===
+[PASS] repo.addFile(tmpPath("beta.txt"))
+[PASS] !repo.addFile(tmpPath("beta.txt"))
+[PASS] !repo.addFile(tmpPath("does-not-exist.txt"))
+[PASS] repo.getFiles().size() == 1
+
+=== Repository: stageFile moves a file into the staging area ===
+[PASS] repo.countStaged() == 0
+[PASS] repo.stageFile(tmpPath("gamma.txt"))
+[PASS] repo.countStaged() == 1
+[PASS] !repo.stageFile("not-tracked.txt")
+
+=== Repository: commit requires something staged ===
+[PASS] !repo.commitChanges("nothing staged", "Bao")
+[PASS] repo.getCommits().empty()
+
+=== Repository: commit snapshots staged files and marks them Committed ===
+[PASS] repo.commitChanges("first commit", "Bao")
+[PASS] repo.getCommits().size() == 1
+[PASS] repo.getFiles()[0].getStatus() == Status::Committed
+[PASS] repo.countStaged() == 0
+[PASS] commit != nullptr
+[PASS] commit->getFileSnapshots().size() == 1
+[PASS] commit->getFileSnapshots().at(tmpPath("eps.txt")) == "content\n"
+
+=== Repository: each commit is a FULL snapshot, not just the new files ===
+[PASS] second != nullptr
+[PASS] second->getFileSnapshots().size() == 2
+[PASS] second->getFileSnapshots().count(tmpPath("one.txt")) == 1
+[PASS] second->getFileSnapshots().count(tmpPath("two.txt")) == 1
+
+=== Repository: getCommitHistory returns one summary per commit ===
+[PASS] history.size() == 1
+[PASS] history[0].find("only commit") != string::npos
+
+=== Repository: restoreFile brings back an older snapshot ===
+[PASS] repo.refreshFile(tmpPath("restore.txt"))
+[PASS] repo.getFiles()[0].getContent() == "version two\n"
+[PASS] repo.getFiles()[0].getStatus() == Status::Modified
+[PASS] repo.restoreFile(id, tmpPath("restore.txt"))
+[PASS] repo.getFiles()[0].getContent() == "version one\n"
+[PASS] repo.getFiles()[0].getStatus() == Status::Modified
+
+=== Repository: restoreFile rejects unknown commits and untracked files ===
+[PASS] !repo.restoreFile("no-such-commit", tmpPath("r2.txt"))
+[PASS] !repo.restoreFile(id, tmpPath("never-committed.txt"))
+
+=== Repository: findFile / findCommit / isTracked ===
+[PASS] repo.isTracked(tmpPath("find.txt"))
+[PASS] !repo.isTracked("nope.txt")
+[PASS] repo.findFile(tmpPath("find.txt")) != nullptr
+[PASS] repo.findFile("nope.txt") == nullptr
+[PASS] repo.findCommit(repo.getCommits()[0]->getCommitID()) != nullptr
+[PASS] repo.findCommit("nope") == nullptr
+
+=== Repository: writeFile puts content on disk ===
+[PASS] repo.writeFile(tmpPath("written.txt"), "written by the repo\n")
+[PASS] readTmpFile("written.txt") == "written by the repo\n"
+
+=== DataManager: save then load round-trips files and commits ===
+[PASS] data.saveData(original, saveFile)
+[PASS] data.loadData(loaded, saveFile)
+[PASS] loaded.isInitialized()
+[PASS] loaded.getRepositoryName() == original.getRepositoryName()
+[PASS] loaded.getRepPath() == original.getRepPath()
+[PASS] loaded.getFiles().size() == 1
+[PASS] loaded.getFiles()[0].getPath() == original.getFiles()[0].getPath()
+[PASS] loaded.getFiles()[0].getContent() == original.getFiles()[0].getContent()
+[PASS] loaded.getFiles()[0].getStatus() == Status::Committed
+[PASS] loaded.getCommits().size() == 1
+[PASS] loaded.getCommits()[0]->getMessage() == "saved commit"
+[PASS] loaded.getCommits()[0]->getAuthor() == "Bao"
+[PASS] loaded.getCommits()[0]->getSummary() == original.getCommits()[0]->getSummary()
+[PASS] commit != nullptr
+[PASS] commit->getFileSnapshots().at(tmpPath("save1.txt")) == "first line\nsecond line\n"
+
+=== DataManager: loading a missing file fails cleanly ===
+[PASS] !data.loadData(repo, tmpPath("no-such-save.dat"))
+[PASS] !repo.isInitialized()
+
+=== DataManager: a corrupt save file is rejected without wiping the repo ===
+[PASS] !data.loadData(repo, tmpPath("corrupt.dat"))
+[PASS] repo.getRepositoryName() == "test-repo"
+[PASS] repo.getFiles().size() == 1
+[PASS] repo.getCommits().size() == 1
+
+=== DataManager: a non-numeric count is rejected instead of throwing ===
+[PASS] !data.loadData(repo, tmpPath("garbage.dat"))
+
+=== AnalyticsEngine: counts commits and tracked files ===
+[PASS] commitStats.computeTotalCommits(repo.getCommits()) == 1
+[PASS] fileStats.computeTrackedFilesCount(repo.getFiles()) == 2
+
+=== AnalyticsEngine: reports the most committed file ===
+[PASS] most.find("often.txt") != string::npos
+[PASS] most.find("2 commit(s)") != string::npos
+
+=== AnalyticsEngine: empty repository reports no committed files ===
+[PASS] commitStats.computeTotalCommits(repo.getCommits()) == 0
+[PASS] commitStats.computeMostModifiedFiles(repo.getCommits()).find("no files") != string::npos
+
+=== RepositoryManager: validates the repository name and path ===
+[PASS] !manager.initRepository("ab", TMP_DIR)
+[PASS] manager.lastMessage().find("too short") != string::npos
+[PASS] !manager.initRepository("good-name", "bad<path>")
+[PASS] manager.lastMessage().find("path is not valid") != string::npos
+[PASS] manager.initRepository("good-name", TMP_DIR)
+[PASS] manager.isInitialized()
+[PASS] manager.getRepositoryName() == "good-name"
+
+=== RepositoryManager: refuses every operation before init ===
+[PASS] !manager.addFile("x.txt")
+[PASS] manager.lastMessage().find("Initialize a repository first") != string::npos
+[PASS] !manager.stageFile("x.txt")
+[PASS] !manager.commitChanges("m", "a")
+[PASS] !manager.saveRepository("x.dat")
+
+=== RepositoryManager: explains WHY adding a file failed ===
+[PASS] !manager.addFile(tmpPath("missing.txt"))
+[PASS] manager.lastMessage().find("Cannot open") != string::npos
+[PASS] manager.addFile(tmpPath("mgr1.txt"))
+[PASS] !manager.addFile(tmpPath("mgr1.txt"))
+[PASS] manager.lastMessage().find("already tracked") != string::npos
+
+=== RepositoryManager: staging reports precise outcomes ===
+[PASS] !manager.stageFile("untracked.txt")
+[PASS] manager.lastMessage().find("not tracked") != string::npos
+[PASS] manager.stageFile(tmpPath("mgr2.txt"))
+[PASS] !manager.stageFile(tmpPath("mgr2.txt"))
+[PASS] manager.lastMessage().find("already staged") != string::npos
+[PASS] manager.getStagedCount() == 1
+
+=== RepositoryManager: stageAllFiles stages every modified file ===
+[PASS] manager.stageAllFiles()
+[PASS] manager.getStagedCount() == 2
+[PASS] !manager.stageAllFiles()
+[PASS] manager.lastMessage().find("No modified files") != string::npos
+
+=== RepositoryManager: commit validates author and message ===
+[PASS] !manager.commitChanges("a message", "12345")
+[PASS] manager.lastMessage().find("Author rejected") != string::npos
+[PASS] !manager.commitChanges("   ", "Bao")
+[PASS] manager.lastMessage().find("Message rejected") != string::npos
+[PASS] manager.commitChanges("a real message", "Bao")
+[PASS] manager.getTotalCommits() == 1
+
+=== RepositoryManager: commit with nothing staged is refused ===
+[PASS] !manager.commitChanges("msg", "Bao")
+[PASS] manager.lastMessage().find("Nothing staged") != string::npos
+
+=== RepositoryManager: searchCommits matches anywhere in the summary ===
+[PASS] manager.searchCommits("parser").size() == 1
+[PASS] manager.searchCommits("Andrei").size() == 1
+[PASS] manager.searchCommits("").size() == 2
+[PASS] manager.searchCommits("nothing").empty()
+
+=== RepositoryManager: getFileStatus tracks the workflow ===
+[PASS] manager.getFileStatus(tmpPath("st.txt")) == "File not found"
+[PASS] manager.getFileStatus(tmpPath("st.txt")) == "Modified"
+[PASS] manager.getFileStatus(tmpPath("st.txt")) == "Staged"
+[PASS] manager.getFileStatus(tmpPath("st.txt")) == "Committed"
+
+=== RepositoryManager: createAndTrackFile writes a new file but never clobbers ===
+[PASS] manager.createAndTrackFile(tmpPath("brand-new.txt"), "fresh\n")
+[PASS] readTmpFile("brand-new.txt") == "fresh\n"
+[PASS] manager.getFileStatus(tmpPath("brand-new.txt")) == "Modified"
+[PASS] !manager.createAndTrackFile(tmpPath("brand-new.txt"), "overwrite?\n")
+[PASS] manager.lastMessage().find("already exists") != string::npos
+[PASS] readTmpFile("brand-new.txt") == "fresh\n"
+
+=== RepositoryManager: diffFileAgainstCommit compares snapshot to working copy ===
+[PASS] manager.diffFileAgainstCommit(id, tmpPath("diff.txt"), diff)
+[PASS] diff.find("+ line two") != string::npos
+[PASS] !manager.diffFileAgainstCommit("no-such-id", tmpPath("diff.txt"), diff)
+[PASS] manager.lastMessage().find("No commit with id") != string::npos
+
+=== Integration: track -> stage -> commit -> edit -> restore -> save -> load ===
+[PASS] manager.initRepository("e2e-repo", TMP_DIR)
+[PASS] manager.addFile(tmpPath("e2e.txt"))
+[PASS] manager.stageFile(tmpPath("e2e.txt"))
+[PASS] manager.commitChanges("original version", "Bao")
+[PASS] manager.refreshFile(tmpPath("e2e.txt"))
+[PASS] manager.getFileStatus(tmpPath("e2e.txt")) == "Modified"
+[PASS] manager.stageFile(tmpPath("e2e.txt"))
+[PASS] manager.commitChanges("edited version", "Bao")
+[PASS] manager.getTotalCommits() == 2
+[PASS] manager.diffFileAgainstCommit(firstCommit, tmpPath("e2e.txt"), diff)
+[PASS] diff.find("- original content") != string::npos
+[PASS] diff.find("+ edited content") != string::npos
+[PASS] manager.restoreFile(firstCommit, tmpPath("e2e.txt"))
+[PASS] manager.writeFileToDisk(tmpPath("e2e.txt"))
+[PASS] readTmpFile("e2e.txt") == "original content\n"
+[PASS] manager.saveRepository(saveFile)
+[PASS] reloaded.loadRepository(saveFile)
+[PASS] reloaded.getRepositoryName() == "e2e-repo"
+[PASS] reloaded.getTotalCommits() == 2
+[PASS] reloaded.getTrackedFileCount() == 1
+[PASS] reloaded.searchCommits("edited version").size() == 1
+[PASS] reloaded.diffFileAgainstCommit(firstCommit, tmpPath("e2e.txt"), reloadedDiff)
+[PASS] reloadedDiff == "No differences found"
+
+=== Integration: the view renders live model objects from the manager ===
+[PASS] output.find("view-repo") != string::npos
+[PASS] output.find("view.txt") != string::npos
+[PASS] output.find("Committed") != string::npos
+[PASS] output.find("visible commit") != string::npos
+[PASS] output.find("Bao") != string::npos
+
 ----------------------------------------
-Results: 73 passed, 0 failed
+Results: 274 passed, 0 failed
