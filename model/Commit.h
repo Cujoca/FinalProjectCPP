@@ -24,7 +24,9 @@ class Commit {
             string commitID
         );
         virtual ~Commit() = default;
-        virtual void displayCommit() = 0;
+        // const so a commit can be displayed through a const reference — printing a
+        // commit never modifies it, and the view only ever holds const commits.
+        virtual void displayCommit() const = 0;
         virtual string getSummary() const = 0;
 
         friend bool operator==(const Commit &cur, const Commit &other) {return cur.getCommitID() == other.getCommitID();};

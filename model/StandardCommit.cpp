@@ -12,14 +12,14 @@ StandardCommit::StandardCommit(string author, string message, string timestamp, 
 
 StandardCommit::~StandardCommit() = default;
 
-void StandardCommit::displayCommit() {
+void StandardCommit::displayCommit() const {
     cout << "Author: " << this->getAuthor() << endl;
     cout << "Message: " << this->getMessage() << endl;
     cout << "Timestamp: " << this->getTimestamp() << endl;
     cout << "Commit ID: " << this->getCommitID() << endl;
-    cout << "Files being commited (path):" << endl;
+    cout << "Files in this snapshot (" << fileSnapshots.size() << "):" << endl;
     // go through tracked files and just print out path, we don't want to print the entire content
-    for (const auto &fst: fileSnapshots | views::keys) { cout << fst; }
+    for (const auto &fst: fileSnapshots | views::keys) { cout << "  " << fst << endl; }
 }
 
 string StandardCommit::getSummary() const {

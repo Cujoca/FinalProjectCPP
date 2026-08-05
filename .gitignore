@@ -68,6 +68,9 @@ vcpkg_installed/
 Testing/
 .cache/
 
+# saved repository data written by the app at run time
+*.dat
+
 # CLion / JetBrains IDE
 .idea/
 cmake-build-*/

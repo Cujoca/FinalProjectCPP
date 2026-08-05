@@ -1,45 +1,93 @@
 #include "DataManager.h"
 
+#include <cctype>
 #include <fstream>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <utility>
-/* 
-*HELPER FUNCTION
-*Writes the text block then the text 
+#include <vector>
 
+namespace {
+
+/*
+*HELPER FUNCTION
+*Writes the text block then the text
 */
 void writeTextBlock(ofstream& outofFile, const string& text) {
-    int sizE1 = text.size();
+    int sizE1 = static_cast<int>(text.size());
 
 
-    
+
     outofFile << sizE1 << endl;
     outofFile << text << endl;
 }
 
 /*
 *HELPER FUNCTION
-* READ size then 
+* Reads one line and parses it as a count. Returns false on a missing or
+* non-numeric line instead of throwing, so a truncated or hand-edited save file
+* is reported as a failed load rather than crashing the program.
 */
-string readTextBlock(ifstream& inFile) {
+bool readCount(ifstream& inFile, int& outCount) {
     string line;
+
+    if (!getline(inFile, line)) {
+        return false;
+    }
+
+    // tolerate a trailing '\r' from a file written with Windows line endings
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+    }
+
+    if (line.empty()) {
+        return false;
+    }
+
+    for (char character : line) {
+
+        if (!isdigit(static_cast<unsigned char>(character))) {
+            return false;
+        }
+    }
+
+    outCount = stoi(line);
+
+    return true;
+}
+
+/*
+*HELPER FUNCTION
+* READ size then the text itself
+*/
+bool readTextBlock(ifstream& inFile, string& outText) {
+    int sizE1 = 0;
+
+    if (!readCount(inFile, sizE1)) {
+        return false;
+    }
+
     string result = "";
-
-
-    getline(inFile, line);
-    int sizE1 = stoi(line);
 
     if (sizE1 > 0) {
         result.resize(sizE1);
         inFile.read(&result[0], sizE1);
+
+        if (inFile.gcount() != sizE1) {
+            return false;
+        }
     }
 
     // clears the extra endl after text block
+    string line;
     getline(inFile, line);
-    return result;
+
+    outText = result;
+
+    return true;
 }
+
+} // namespace
 
 
 bool DataManager::saveData(Repository& repo, const string fileName) {
@@ -48,7 +96,6 @@ bool DataManager::saveData(Repository& repo, const string fileName) {
 
 
     if (!outofFile) {
-        cout << "Save file could not be opened" << endl;
         return false;
     }
 
@@ -92,7 +139,7 @@ bool DataManager::saveData(Repository& repo, const string fileName) {
         }
         else {
 
-            map<string, string> exSnapshots = pointerCommit->getFileSnapshots();
+            const map<string, string>& exSnapshots = pointerCommit->getFileSnapshots();
 
             outofFile << exSnapshots.size() << endl;
 
@@ -108,7 +155,7 @@ bool DataManager::saveData(Repository& repo, const string fileName) {
 
     outofFile.close();
 
-    return true;
+    return !outofFile.fail();
 }
 
 
@@ -118,26 +165,29 @@ bool DataManager::loadData(Repository& repo, const string fileName) {
     inFile.open(fileName);
 
     if (!inFile) {
-        cout << "Load file could not be opened" << endl;
         return false;
     }
 
-    string line;
     string repoName;
     string repoPath;
 
     // read repo info
-    getline(inFile, repoName);
-    getline(inFile, repoPath);
+    if (!getline(inFile, repoName) || !getline(inFile, repoPath)) {
+        return false;
+    }
 
-    repo.initRepository(repoName, repoPath);
-
-    repo.getFiles().clear();
-    repo.getCommits().clear();
+    // Everything is parsed into local containers first and only handed to the
+    // repository once the whole file has been read successfully. A corrupt save
+    // file therefore leaves the in-memory repository exactly as it was.
+    vector<TrackedFile>        loadedFiles;
+    vector<unique_ptr<Commit>> loadedCommits;
 
     // read tracked files
-    getline(inFile, line);
-    int fileCounT1 = stoi(line);
+    int fileCounT1 = 0;
+
+    if (!readCount(inFile, fileCounT1)) {
+        return false;
+    }
 
     for (int counTer1 = 0; counTer1 < fileCounT1; counTer1++) {
 
@@ -145,37 +195,46 @@ bool DataManager::loadData(Repository& repo, const string fileName) {
         string statusText;
         string content;
 
-        getline(inFile, filePath);
-        getline(inFile, statusText);
+        if (!getline(inFile, filePath) || !getline(inFile, statusText)) {
+            return false;
+        }
 
-        content = readTextBlock(inFile);
+        if (!readTextBlock(inFile, content)) {
+            return false;
+        }
 
         TrackedFile newFile(filePath, content);
         newFile.setStatus(statusFromString(statusText));
 
-        repo.getFiles().push_back(newFile);
+        loadedFiles.push_back(newFile);
     }
 
     // read commits
-    getline(inFile, line);
-    int commitCounT1 = stoi(line);
+    int commitCounT1 = 0;
+
+    if (!readCount(inFile, commitCounT1)) {
+        return false;
+    }
 
     for (int counTer2 = 0; counTer2 < commitCounT1; counTer2++) {
-//create the vales 
+//create the vales
         string commitID;
         string author;
         string message;
         string timestamp;
 
         //set the values
-        getline(inFile, commitID);
-        getline(inFile, author);
-        getline(inFile, message);
-        getline(inFile, timestamp);
+        if (!getline(inFile, commitID) || !getline(inFile, author) ||
+            !getline(inFile, message)  || !getline(inFile, timestamp)) {
+            return false;
+        }
 
         map<string, string> Tempsnapshots;
-        getline(inFile, line);
-        int snapshotCounT1 = stoi(line);
+        int snapshotCounT1 = 0;
+
+        if (!readCount(inFile, snapshotCounT1)) {
+            return false;
+        }
 
 
 
@@ -185,9 +244,14 @@ bool DataManager::loadData(Repository& repo, const string fileName) {
             string snapshotCont;
 
 
-            getline(inFile, snapshotPath);
+            if (!getline(inFile, snapshotPath)) {
+                return false;
+            }
 
-            snapshotCont = readTextBlock(inFile);
+            if (!readTextBlock(inFile, snapshotCont)) {
+                return false;
+            }
+
             Tempsnapshots[snapshotPath] = snapshotCont;
         }
 
@@ -204,10 +268,18 @@ bool DataManager::loadData(Repository& repo, const string fileName) {
 
 
         newCommit->setFileSnapshots(Tempsnapshots);
-        repo.getCommits().push_back(move(newCommit));
+        loadedCommits.push_back(move(newCommit));
     }
 
     inFile.close();
+
+    // the file parsed cleanly — publish it to the repository
+    if (!repo.initRepository(repoName, repoPath)) {
+        return false;
+    }
+
+    repo.getFiles()   = move(loadedFiles);
+    repo.getCommits() = move(loadedCommits);
 
     return true;
 }
