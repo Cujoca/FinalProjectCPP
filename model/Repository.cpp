@@ -1,6 +1,7 @@
 #include "Repository.h"
 #include "StandardCommit.h"
 #include <algorithm>
+#include <charconv>
 #include <ctime>
 #include <filesystem>
 #include <format>

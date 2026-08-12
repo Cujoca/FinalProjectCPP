@@ -242,9 +242,10 @@ static void testValidator() {
         CHECK(result.error() == Error::TooShort);
     }
 
-    SECTION("Validator: validateRepoName - too long (> 20 chars)");
+    SECTION("Validator: validateRepoName - too long (> 50 chars)");
     {
-        auto result = v.validateRepoName("this-name-is-way-too-long");
+        // 51 characters, one past the cap the spec asks for
+        auto result = v.validateRepoName("abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijk");
         CHECK(!result.has_value());
         CHECK(result.error() == Error::TooLong);
     }
@@ -269,9 +270,10 @@ static void testValidator() {
         CHECK(result.has_value());
     }
 
-    SECTION("Validator: validateRepoName - exactly 20 chars");
+    SECTION("Validator: validateRepoName - exactly 50 chars");
     {
-        auto result = v.validateRepoName("abcdefghij1234567890");
+        // exactly on the cap, so this one has to pass
+        auto result = v.validateRepoName("abcdefghijabcdefghijabcdefghijabcdefghijabcdefghij");
         CHECK(result.has_value());
     }
 }

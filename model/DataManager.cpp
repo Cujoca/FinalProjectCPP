@@ -2,7 +2,7 @@
 #include "StandardCommit.h"
 #include "TrackedFile.h"
 
-#include <cctype>
+#include <charconv>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -25,6 +25,25 @@ void writeTextBlock(ofstream &outofFile, const string &text) {
   outofFile << text << endl;
 }
 
+// helper function, creates a (fuckass windows) universal function for reading
+// in lines from a file. This is able to avoid the random \r that windows
+// creates for whatever godforsaken reason.
+//
+// sits above everything else in here on purpose, since every other read now
+// goes through it. answers the "why is it only remembered in readCount" note
+// that used to be down there
+bool readLine(ifstream &in, string &out) {
+  if (!getline(in, out)) {
+    return false;
+  }
+
+  if (!out.empty() && out.back() == '\r') {
+    out.pop_back();
+  }
+
+  return true;
+}
+
 /*
  *HELPER FUNCTION
  * Reads one line and parses it as a count. Returns false on a missing or
@@ -34,32 +53,20 @@ void writeTextBlock(ofstream &outofFile, const string &text) {
 bool readCount(ifstream &inFile, int &outCount) {
   string line;
 
-  if (!getline(inFile, line)) {
+  if (!readLine(inFile, line) || line.empty()) {
     return false;
   }
 
-  // tolerate a trailing '\r' from a file written with Windows line endings
-  //
-  // so uh, why is it that only this \r gets remembered? because every other
-  // line read does not take this \r into account
-  if (!line.empty() && line.back() == '\r') {
-    line.pop_back();
-  }
+  const char *first = line.data();
+  const char *last = line.data() + line.size();
 
-  if (line.empty()) {
-    return false;
-  }
+  // from_chars rather than stoi, same reasoning as idNumber over in Repository:
+  // twenty digits gets past any isdigit loop and then makes stoi throw, and
+  // nothing up the stack catches it
+  const auto parsed = from_chars(first, last, outCount);
 
-  for (char character : line) {
-
-    if (!isdigit(static_cast<unsigned char>(character))) {
-      return false;
-    }
-  }
-
-  outCount = stoi(line);
-
-  return true;
+  // the whole line has to be the number, and a count can't be negative
+  return parsed.ec == errc{} && parsed.ptr == last && outCount >= 0;
 }
 
 /*
@@ -93,20 +100,9 @@ bool readTextBlock(ifstream &inFile, string &outText) {
   return true;
 }
 
-// helper function, creates a (fuckass windows) universal function for reading
-// in lines from a file. This is able to avoid the random \r that windows
-// creates for whatever godforsaken reason.
-bool readLine(ifstream &in, string &out) {
-  string path, statusText, content;
-  if (!getline(in, path) || !readLine(in, statusText))
-    return false;
-  if (!out.empty() && out.back() == '\r')
-    out.pop_back();
-  return true;
-}
-
 // Applies some checks on the tracked file, returning nullopt if it is somehow
-// not valid
+// not valid. optional and not an out param because TrackedFile has no default
+// constructor, so the caller has nothing to hand us
 optional<TrackedFile> readTrackedFile(ifstream &in) {
   string path, statusText, content;
   if (!readLine(in, path) || !readLine(in, statusText)) {
@@ -116,13 +112,17 @@ optional<TrackedFile> readTrackedFile(ifstream &in) {
     return nullopt;
   }
 
-  const optional<Status> status = statusFromString(statusText);
-  if (!status) {
+  // statusFromString dumps anything it doesn't recognise into Error, so that is
+  // how a status of "Banana" in the save file turns up here. would be tidier if
+  // it handed back an optional<Status> and Error left the enum, but that's a
+  // TrackedFile change and this isn't the night for it
+  const Status status = statusFromString(statusText);
+  if (status == Status::Error) {
     return nullopt;
   }
 
   TrackedFile file(path, content);
-  file.setStatus(*status);
+  file.setStatus(status);
   return file;
 }
 
@@ -131,7 +131,7 @@ optional<TrackedFile> readTrackedFile(ifstream &in) {
 unique_ptr<Commit> readCommit(ifstream &in) {
   string id, author, message, timestamp;
   if (!readLine(in, id) || !readLine(in, author) || !readLine(in, message) ||
-      readLine(in, timestamp)) {
+      !readLine(in, timestamp)) {
     return nullptr;
   }
 
@@ -229,7 +229,7 @@ bool DataManager::loadData(Repository &repo, const string fileName) {
   string repoPath;
 
   // read repo info
-  if (!getline(inFile, repoName) || !getline(inFile, repoPath)) {
+  if (!readLine(inFile, repoName) || !readLine(inFile, repoPath)) {
     return false;
   }
 
@@ -248,25 +248,15 @@ bool DataManager::loadData(Repository &repo, const string fileName) {
   }
 
   for (int counTer1 = 0; counTer1 < fileCounT1; counTer1++) {
+    optional<TrackedFile> file = readTrackedFile(inFile);
 
-    auto file = readTrackedFile(inFile);
-
-    string filePath;
-    string statusText;
-    string content;
-
-    if (!getline(inFile, seenIDs.insert(file->getPath()).second)  {
+    // insert() hands back whether the value was new, so the duplicate check and
+    // writing down what we've already seen are the same call
+    if (!file || !seenPaths.insert(file->getPath()).second) {
       return false;
     }
 
-    if (!readTextBlock(inFile, content)) {
-      return false;
-    }
-
-    TrackedFile newFile(filePath, content);
-    newFile.setStatus(statusFromString(statusText));
-
-    loadedFiles.push_back(newFile);
+    loadedFiles.push_back(move(*file));
   }
 
   // read commits
@@ -276,48 +266,17 @@ bool DataManager::loadData(Repository &repo, const string fileName) {
     return false;
   }
 
-  std::set<std::string> seen;
-
   for (int counTer2 = 0; counTer2 < commitCounT1; counTer2++) {
-    // create the vales
-    string commitID;
-    string author;
-    string message;
-    string timestamp;
+    unique_ptr<Commit> commit = readCommit(inFile);
 
-    // set the values
-    if (!getline(inFile, commitID) || !getline(inFile, author) ||
-        !getline(inFile, message) || !getline(inFile, timestamp)) {
+    // same deal as the files above, except a duplicate commitID matters more:
+    // findCommit takes the first match, so restore and diff would quietly work
+    // on the wrong commit for the rest of the session
+    if (!commit || !seenIDs.insert(commit->getCommitID()).second) {
       return false;
     }
 
-    map<string, string> Tempsnapshots;
-    int snapshotCounT1 = 0;
-
-    if (!readCount(inFile, snapshotCounT1)) {
-      return false;
-    }
-
-    for (int counTer3 = 0; counTer3 < snapshotCounT1; counTer3++) {
-      string snapshotPath;
-      string snapshotCont;
-
-      if (!getline(inFile, snapshotPath)) {
-        return false;
-      }
-
-      if (!readTextBlock(inFile, snapshotCont)) {
-        return false;
-      }
-
-      Tempsnapshots[snapshotPath] = snapshotCont;
-    }
-
-    auto newCommit =
-        make_unique<StandardCommit>(author, message, timestamp, commitID);
-
-    newCommit->setFileSnapshots(Tempsnapshots);
-    loadedCommits.push_back(move(newCommit));
+    loadedCommits.push_back(move(commit));
   }
 
   inFile.close();
