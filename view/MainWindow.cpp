@@ -96,14 +96,14 @@ QWidget* MainWindow::buildRepositoryTab() {
     auto* createForm   = new QFormLayout(createBox);
     repoNameEdit       = new QLineEdit(createBox);
     repoPathEdit       = new QLineEdit(".", createBox);
-    repoNameEdit->setPlaceholderText("3-20 characters, at least one letter");
+    repoNameEdit->setPlaceholderText("3-50 characters, at least one letter");
 
     auto* browsePathButton = new QPushButton("Browse...", createBox);
     auto* pathRow          = new QHBoxLayout;
     pathRow->addWidget(repoPathEdit);
     pathRow->addWidget(browsePathButton);
 
-    auto* createButton = new QPushButton("Create repository", createBox);
+    auto* createButton = new QPushButton("Initialize", createBox);
     createForm->addRow("Name:", repoNameEdit);
     createForm->addRow("Path:", pathRow);
     createForm->addRow("", createButton);
@@ -161,12 +161,15 @@ QWidget* MainWindow::buildFilesTab() {
     auto* layout = new QVBoxLayout(page);
 
     // --- the tracked files table ---
-    filesTable = new QTableWidget(0, 3, page);
-    filesTable->setHorizontalHeaderLabels({"Path", "Status", "Size (bytes)"});
+    // Columns follow the specification's File View mockup: File Path, Status,
+    // Last Modified. Size is carried alongside because TrackedFile tracks it.
+    filesTable = new QTableWidget(0, 4, page);
+    filesTable->setHorizontalHeaderLabels({"File Path", "Status", "Size (bytes)", "Last Modified"});
     filesTable->horizontalHeader()->setStretchLastSection(false);
     filesTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     filesTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     filesTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    filesTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     filesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     filesTable->setSelectionMode(QAbstractItemView::SingleSelection);
     filesTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -269,16 +272,33 @@ QWidget* MainWindow::buildCommitsTab() {
     auto* commitForm = new QFormLayout(commitBox);
     authorEdit       = new QLineEdit(commitBox);
     messageEdit      = new QLineEdit(commitBox);
-    authorEdit->setPlaceholderText("must contain at least one letter");
-    messageEdit->setPlaceholderText("what changed?");
+    authorEdit->setPlaceholderText("3-50 characters, at least one letter");
+    messageEdit->setPlaceholderText("what changed? (5-200 characters)");
 
+    // Commit / Cancel, as the specification's Commit Form mockup lays out.
     auto* commitButton = new QPushButton("Commit", commitBox);
+    auto* cancelButton = new QPushButton("Cancel", commitBox);
+    auto* commitRow    = new QHBoxLayout;
+    commitRow->addWidget(commitButton);
+    commitRow->addWidget(cancelButton);
+    commitRow->addStretch();
+
     commitForm->addRow("Author:",  authorEdit);
     commitForm->addRow("Message:", messageEdit);
-    commitForm->addRow("", commitButton);
+    commitForm->addRow("", commitRow);
 
     connect(commitButton, &QPushButton::clicked, this, &MainWindow::onCommit);
     connect(messageEdit,  &QLineEdit::returnPressed, this, &MainWindow::onCommit);
+
+    // Cancel abandons the commit being typed. The author is deliberately kept -
+    // it is almost always the same person for the next commit.
+    connect(cancelButton, &QPushButton::clicked, this, [this] {
+        messageEdit->clear();
+        onValidateFields();
+        statusBar()->showMessage("Commit cancelled.", 4000);
+    });
+
+    cancelButton->setObjectName("cancelCommitButton");
 
     // --- history ---
     commitsTable = new QTableWidget(0, 5, page);
@@ -424,12 +444,12 @@ void MainWindow::onSaveRepository() {
     // Feature 4 — refuse to save while the form is invalid, rather than writing
     // a half-valid repository out to disk.
     if (!manager.isInitialized()) {
-        QMessageBox::warning(this, "Save", "Create or load a repository first.");
+        warn("Save", "Create or load a repository first.");
         return;
     }
     if (saveFileEdit->text().trimmed().isEmpty()) {
         markField(saveFileEdit, "a data file name is required");
-        QMessageBox::warning(this, "Save", "Enter a name for the data file first.");
+        warn("Save", "Enter a name for the data file first.");
         return;
     }
     markField(saveFileEdit, "");
@@ -484,7 +504,7 @@ void MainWindow::onBrowseForFile() {
 
 void MainWindow::onAddFile() {
     if (filePathEdit->text().isEmpty()) {
-        QMessageBox::warning(this, "Track a file", "Choose a file first.");
+        warn("Track a file", "Choose a file first.");
         return;
     }
     const QString path = filePathEdit->text();
@@ -500,7 +520,7 @@ void MainWindow::onAddFile() {
 
 void MainWindow::onCreateFile() {
     if (newFileNameEdit->text().isEmpty()) {
-        QMessageBox::warning(this, "Create a file", "Give the new file a path.");
+        warn("Create a file", "Give the new file a path.");
         return;
     }
     const QString path    = newFileNameEdit->text();
@@ -521,7 +541,7 @@ void MainWindow::onCreateFile() {
 void MainWindow::onStageFile() {
     const QString path = selectedFilePath();
     if (path.isEmpty()) {
-        QMessageBox::information(this, "Stage", "Select a file in the table first.");
+        info("Stage", "Select a file in the table first.");
         return;
     }
     const bool ok = manager.stageFile(toStd(path));
@@ -540,7 +560,7 @@ void MainWindow::onStageAll() {
 void MainWindow::onRefreshFile() {
     const QString path = selectedFilePath();
     if (path.isEmpty()) {
-        QMessageBox::information(this, "Re-read", "Select a file in the table first.");
+        info("Re-read", "Select a file in the table first.");
         return;
     }
     const bool ok = guarded("Re-reading the file", [this, path] {
@@ -555,7 +575,7 @@ void MainWindow::onRefreshFile() {
 void MainWindow::onShowContent() {
     const QString path = selectedFilePath();
     if (path.isEmpty()) {
-        QMessageBox::information(this, "Show content", "Select a file in the table first.");
+        info("Show content", "Select a file in the table first.");
         return;
     }
     std::string content;
@@ -576,12 +596,28 @@ void MainWindow::onShowContent() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::onCommit() {
+    /* Guards the Commit button being hammered.
+     *
+     * A second press that arrives before this one has finished - a queued click,
+     * Enter held down in the message field - is dropped rather than producing a
+     * second commit. The flag is cleared on every exit path, so a failed commit
+     * does not leave the button dead.
+     */
+    if (commitBusy) {
+        statusBar()->showMessage("Still committing - ignoring the repeat press.", 3000);
+        return;
+    }
+
+    commitBusy = true;
+
     const bool ok = manager.commitChanges(toStd(messageEdit->text()),
                                           toStd(authorEdit->text()));
     report(ok);
     if (ok) messageEdit->clear();   // the author usually stays the same
     refreshAll();
     if (ok) setUnsavedChanges(true);
+
+    commitBusy = false;
 }
 
 void MainWindow::onSearchCommits() {
@@ -617,21 +653,23 @@ void MainWindow::onRestoreFile() {
     const QString path     = selectedFilePath();
 
     if (commitId.isEmpty()) {
-        QMessageBox::information(this, "Restore", "Select a commit in the table first.");
+        info("Restore", "Select a commit in the table first.");
         return;
     }
     if (path.isEmpty()) {
-        QMessageBox::information(this, "Restore",
+        info("Restore",
                                  "Select the file to restore in the Files tab first.");
         return;
     }
 
-    // Feature 6 — restoring overwrites the tracked copy, so confirm first
-    const auto proceed = QMessageBox::warning(
-        this, "Restore",
+    // Feature 6 — restoring overwrites the tracked copy, so confirm first.
+    // A prompt that cannot be shown counts as No: never overwrite unasked.
+    const auto proceed = ask(
+        "Restore",
         QString("Restoring '%1' from commit %2 will overwrite the current "
                 "changes to that file.\n\nContinue?").arg(path, commitId),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No,
+        QMessageBox::No, QMessageBox::Warning);
 
     if (proceed != QMessageBox::Yes) return;
 
@@ -644,10 +682,11 @@ void MainWindow::onRestoreFile() {
 
     // Overwriting the working file is a separate, explicit decision — same as the
     // y/n question the console front end asks.
-    const auto answer = QMessageBox::question(
-        this, "Write to disk",
+    const auto answer = ask(
+        "Write to disk",
         QString("'%1' was restored from commit %2.\n\nWrite the restored content "
-                "over the file on disk?").arg(path, commitId));
+                "over the file on disk?").arg(path, commitId),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No, QMessageBox::No);
 
     if (answer == QMessageBox::Yes) {
         report(guarded("Writing the file", [this, path] {
@@ -663,7 +702,7 @@ void MainWindow::onRestoreFile() {
 
 void MainWindow::onComputeDiff() {
     if (diffCommitBox->count() == 0 || diffFileBox->count() == 0) {
-        QMessageBox::information(this, "Diff", "Commit a file first — there is nothing to compare.");
+        info("Diff", "Commit a file first — there is nothing to compare.");
         return;
     }
 
@@ -703,6 +742,15 @@ void MainWindow::refreshFilesTable() {
         filesTable->setItem(row, 0, cell(toQ(file.getPath())));
         filesTable->setItem(row, 1, cell(toQ(statusToString(file.getStatus()))));
         filesTable->setItem(row, 2, cell(QString::number(file.getSize())));
+
+        /* "Last Modified" comes from the file system rather than the model,
+         * because TrackedFile stores no timestamp. A file that is tracked but
+         * no longer on disk shows a dash instead of an invented date.
+         */
+        const QFileInfo info(toQ(manager.resolvePath(file.getPath())));
+        filesTable->setItem(row, 3, cell(info.exists()
+                                         ? info.lastModified().toString("yyyy-MM-dd HH:mm")
+                                         : QStringLiteral("-")));
     }
 
     // keep the user's selection across a refresh
@@ -812,8 +860,47 @@ void MainWindow::report(const bool ok) {
     } else {
         // a failure the user must see, not something to miss in the status bar
         statusBar()->showMessage(message, 8000);
-        QMessageBox::warning(this, "MiniVCS", message);
+        warn("MiniVCS", message);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dialogs - all of them, so stacking can be prevented in one place
+// ---------------------------------------------------------------------------
+
+// The three one-button dialogs are just ask() with nothing to decide, so the
+// stacking guard lives in exactly one place.
+void MainWindow::info(const QString& title, const QString& text) {
+    ask(title, text, QMessageBox::Ok, QMessageBox::Ok, QMessageBox::Ok, QMessageBox::Information);
+}
+
+void MainWindow::warn(const QString& title, const QString& text) {
+    ask(title, text, QMessageBox::Ok, QMessageBox::Ok, QMessageBox::Ok, QMessageBox::Warning);
+}
+
+void MainWindow::fail(const QString& title, const QString& text) {
+    ask(title, text, QMessageBox::Ok, QMessageBox::Ok, QMessageBox::Ok, QMessageBox::Critical);
+}
+
+QMessageBox::StandardButton MainWindow::ask(const QString& title, const QString& text,
+                                            QMessageBox::StandardButtons buttons,
+                                            QMessageBox::StandardButton defaultButton,
+                                            QMessageBox::StandardButton whenBlocked,
+                                            QMessageBox::Icon icon) {
+    /* A confirmation that cannot be shown must not be treated as a "yes", so the
+     * caller says what a blocked prompt should count as - normally Cancel or No.
+     */
+    if (dialogOpen) return whenBlocked;
+
+    dialogOpen = true;
+
+    QMessageBox box(icon, title, text, buttons, this);
+    box.setDefaultButton(defaultButton);
+    const auto answer = static_cast<QMessageBox::StandardButton>(box.exec());
+
+    dialogOpen = false;
+
+    return answer;
 }
 
 bool MainWindow::guarded(const QString& action, const std::function<bool()>& operation) {
@@ -823,14 +910,12 @@ bool MainWindow::guarded(const QString& action, const std::function<bool()>& ope
     catch (const std::exception& ex) {
         // Anything the file system throws at us — a disk error, a permissions
         // problem, a bad conversion — is reported here instead of terminating.
-        QMessageBox::critical(this, "MiniVCS - " + action,
-                              action + " failed.\n\n" + QString::fromUtf8(ex.what()));
+        fail("MiniVCS - " + action, action + " failed.\n\n" + QString::fromUtf8(ex.what()));
         statusBar()->showMessage(action + " failed: " + QString::fromUtf8(ex.what()), 8000);
         return false;
     }
     catch (...) {
-        QMessageBox::critical(this, "MiniVCS - " + action,
-                              action + " failed for an unknown reason.");
+        fail("MiniVCS - " + action, action + " failed for an unknown reason.");
         return false;
     }
 }
@@ -850,11 +935,13 @@ void MainWindow::setUnsavedChanges(const bool changed) {
 bool MainWindow::confirmDiscardChanges() {
     if (!unsavedChanges) return true;
 
-    const auto answer = QMessageBox::question(
-        this, "Unsaved changes",
+    // Blocked prompt counts as Cancel, so unsaved work is never discarded
+    // just because another dialog happened to be on screen.
+    const auto answer = ask(
+        "Unsaved changes",
         "You have unsaved changes.\nDo you want to save before continuing?",
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
-        QMessageBox::Save);
+        QMessageBox::Save, QMessageBox::Cancel);
 
     if (answer == QMessageBox::Cancel) return false;
 

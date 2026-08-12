@@ -74,11 +74,16 @@ string and never has to re-trim it.
 
 | Method | Rule |
 |--------|------|
-| `validateRepoName` | 3–20 chars after trimming, at least one letter |
-| `validateRepoPath` | Windows absolute (`C:\work\repo`) or relative/POSIX (`.`, `data/repo`); rejects `* ? " < > |` |
-| `validateCommitID` | non-empty, letters/digits/dashes, max 40 chars |
-| `validateMessage`  | non-empty after trimming, max 200 chars |
-| `validateAuthor`   | non-empty after trimming, at least one letter, max 50 chars |
+| `validateRepoName` | 3–50 chars after trimming, at least one letter |
+| `validateRepoPath` | Windows absolute (`C:\work\repo`) or relative/POSIX (`.`, `data/repo`); rejects `* ? " < > \|`; max 260 chars |
+| `validateCommitID` | must match `COMMIT-0001` exactly — the literal word `COMMIT`, a dash, then 4+ digits |
+| `validateMessage`  | 5–200 chars after trimming, so whitespace-only messages are rejected |
+| `validateAuthor`   | 3–50 chars after trimming, at least one letter |
+| `validateStatusTransition` | guards `Modified → Staged → Committed`; `Committed → Modified` is allowed, `Modified → Committed` is not |
+
+Two helpers sit alongside them: `formatCommitID(n)` builds the next id in the
+required format (`0` → `COMMIT-0001`), and `trim()` handles spaces and tabs,
+returning an empty string when a value is nothing but whitespace.
 
 Names and paths are trimmed **before** the length rules run, so `"  ab  "` is
 correctly rejected as too short instead of passing on its padding.
@@ -90,25 +95,22 @@ correctly rejected as too short instead of passing on its padding.
 
 The backend. Holds the repository name and path, a `vector<TrackedFile>` of the
 working files and a `vector<unique_ptr<Commit>>` of history, and implements the
-core verbs: `addFile`, `stageFile`, `commitChanges`, `restoreFile`,
-`refreshFile`, plus `writeFile` for pushing content back to disk.
+core verbs: `addFile`, `stageFile`, `commitChanges`, `restoreFile` and
+`getCommitHistory`.
 
-Three things worth knowing:
-- **Paths are relative to the repository root, the way git does it.** A file is
-  identified by its path relative to the repository folder, and that relative
-  form is what gets stored, displayed, snapshotted and saved. A repository at
-  `C:/Users/me/Desktop` tracking `notes.txt` therefore reads and writes
-  `C:/Users/me/Desktop/notes.txt`. `resolvePath()` turns the stored form into a
-  real disk location; `toRepoRelative()` does the reverse, shortening an absolute
-  path that falls inside the repository (one pointing outside is kept absolute,
-  so files elsewhere on the machine can still be tracked). Creating a file makes
-  any missing folders along the way.
-- **Commits are full snapshots.** `commitChanges` starts from the previous
-  commit's snapshot and overlays whatever is staged now, so a file committed in
-  commit 1 is still present in commit 5 and `restoreFile` can always reach it.
-- **It does no I/O of its own.** Failures come back as `false` and the *reason*
-  is worked out one layer up in `RepositoryManager`, which keeps every
-  user-facing message in the view layer where it belongs.
+Two things worth knowing:
+- **It stores the exact path string it is given.** There is no path resolution
+  here — `addFile("notes.txt")` opens `notes.txt` relative to the working
+  directory. Turning what a user types into a repository-relative path is done
+  one layer up, in `AppController`.
+- **A commit records only what is staged at the time.** `commitChanges` builds
+  its snapshot from the files currently marked `Staged`. `AppController` carries
+  the previous commit's snapshot forward on top of that, which is what makes each
+  stored commit a full snapshot and keeps `restoreFile` able to reach a file
+  committed several commits ago.
+
+Failures come back as a bare `bool`; the *reason* is worked out in
+`AppController`, which keeps every user-facing message out of the model.
 
 ---
 
@@ -120,21 +122,25 @@ every tracked file with its status and content, and every commit with its
 snapshot map. Multi-line content is written as a length-prefixed block so
 newlines inside a file can't be confused with the record separators.
 
-A load parses the whole file into local containers first and only hands them to
-the repository once it has succeeded, so a truncated or hand-edited save file is
-reported as a failed load and **leaves the in-memory repository untouched**
-rather than half-overwriting it.
+`loadData` assumes the file it is handed is well formed: it feeds each count line
+straight to `stoi()` and clears the repository before it begins reading. So that
+a truncated or hand-edited save file cannot throw part-way through and leave the
+caller's data half-discarded, `AppController::loadRepository` parses the file
+once as a dry run first and only passes it on if the structure holds up.
 
 ---
 
 ### `DiffEngine`
 **Files:**`model/DiffEngine.h`,`model/DiffEngine.cpp`
 
-Line-by-line diff. Shared lines are found with a longest-common-subsequence
-table, then the two versions are walked in step and each line is emitted as
-context, `-` (only in the old version) or `+` (only in the new one), followed by
-an added/removed tally. Handles LF and CRLF identically, and falls back to a
-plain side-by-side dump for inputs too large to run the quadratic table on.
+Compares two versions of a file's content. Identical content returns
+`No differences found`; anything else is reported by printing both versions in
+full under `Old Content:` and `New Content:` headings. `displayDiff()` writes
+that text to the console.
+
+The comparison is exact, so the same text with different line endings counts as
+a difference. A marker-based line diff (`+` / `-` per line) is noted in the class
+as a later improvement.
 
 ---
 
@@ -144,28 +150,60 @@ plain side-by-side dump for inputs too large to run the quadratic table on.
 Small template over a container: `computeTotalCommits`, `computeTrackedFilesCount`
 and `computeMostModifiedFiles` (which `dynamic_cast`s each `Commit` to
 `StandardCommit` to reach its snapshot map and counts how often each path
-appears). Instantiated twice in `RepositoryManager` — once over
-`vector<unique_ptr<Commit>>`, once over `vector<TrackedFile>`. Everything is
-taken by `const&`, since a vector of `unique_ptr` cannot be copied.
+appears).
+
+It is instantiated twice in `AppController`, and on **reference types** —
+`AnalyticsEngine<vector<unique_ptr<Commit>>&>` rather than
+`AnalyticsEngine<vector<unique_ptr<Commit>>>`. Two of the methods take their
+argument as `const T` *by value*, which for a vector of `unique_ptr` would mean
+copying it and would not compile. Making `T` a reference collapses `const T`
+back to a reference, so the template is used exactly as written and nothing is
+copied.
 
 ---
 
 ## Controller Layer
 
+The controller is two classes: `RepositoryManager` bridges onto the model, and
+`AppController` sits on top of it and is the only thing either front end calls.
+
 ### `RepositoryManager`
-**Files:**`controller/RepositoryManager.h`,`controller/RepositoryManager.cpp`
+**Files:**`controller/RepositoryManager.h`,`controller/RepositoryManager.cpp` — *Omer Ozkaya*
 
-The bridge, and the only class `main.cpp` talks to. It is where the three layers
-actually meet:
+The bridge onto the model. Each method forwards straight to
+`Repository` / `DataManager` / `DiffEngine` and returns the `bool` it gets back;
+`searchCommits` and `getFileStatus` add a little logic of their own. It owns the
+`Repository`, `DataManager` and `DiffEngine` instances, and exposes the
+repository through `getRepository()` so the front ends can read the file list and
+commit history in order to draw them.
 
-1. **Validates** raw user input with `Validator` before the model sees it.
-2. **Delegates** the work to `Repository` / `DataManager` / `DiffEngine` /
-   `AnalyticsEngine`.
-3. **Explains** the outcome. Since the model's methods only return `bool`, the
-   manager works out the specific reason ("already tracked", "cannot open",
-   "nothing staged", "no commit with id …") and stores it in `lastMessage()`,
-   which the app hands straight to the view. That is why a failed operation in
-   the GUI always says *why* it failed.
+### `AppController`
+**Files:**`controller/AppController.h`,`controller/AppController.cpp` — *Bao Vo*
+
+The integration layer, and the only class `main.cpp` and `MainWindow` talk to. It
+**owns** a `RepositoryManager` and hands every repository operation to it, so the
+model-facing work stays where it was written. What it adds is everything an
+interface needs that a `bool` cannot carry:
+
+1. **Paths.** `toRepoRelative()` turns whatever the user typed into a path
+   relative to the repository root — the git convention — and `resolvePath()`
+   turns that back into a real disk location. An absolute path inside the
+   repository is shortened; one pointing outside is kept as-is, so files
+   elsewhere on the machine can still be tracked.
+2. **Validation.** Raw input goes through `Validator` before the model sees it,
+   and `checkRepoName()` and friends expose the same rules to the GUI so a field
+   can be marked red as it is typed.
+3. **Explanation.** The model returns only `bool`, so the specific reason
+   ("already tracked", "cannot open", "nothing staged", "no commit with id …")
+   is worked out here and stored in `lastMessage()`, which the view shows
+   verbatim. That is why a failed operation always says *why*.
+4. **Full snapshots.** After a commit is created it merges the previous commit's
+   snapshot in underneath the newly staged files, so a file committed earlier
+   stays reachable by `restoreFile`.
+5. **Spec-format commit ids.** `Repository` numbers commits `1`, `2`, `3`; the id
+   is rewritten to `COMMIT-0001` form the moment the commit exists.
+6. **Disk access.** Creating, writing and re-reading working files, and
+   structure-checking a save file before `DataManager` is allowed to parse it.
 
 ---
 
@@ -240,7 +278,7 @@ The specification asks for at least three of six; all six are implemented:
 | 6 | Restore confirmation | restoring warns that current changes will be overwritten before it proceeds |
 
 The rules themselves stay in the model: the view asks
-`RepositoryManager::checkRepoName()` and friends, which delegate to `Validator`,
+`AppController::checkRepoName()` and friends, which delegate to `Validator`,
 so the GUI highlights fields without knowing any of the rules.
 
 Because both front ends sit on the identical controller, **adding the GUI
@@ -254,26 +292,35 @@ required no change whatsoever to the model or controller layers**.
 
 The entry point that wires the finished pieces together into a runnable program.
 It runs **MiniVCS**, an interactive version control workflow. The whole app is
-one class, `MiniVCSApp`, holding exactly two members — a `ConsoleView` and a
-`RepositoryManager` — and every menu handler is the same three steps: prompt
-through the view, call one manager method, hand the manager's message back to
-the view.
+one class, `MiniVCSApp`, holding exactly two members — a `ConsoleView` and an
+`AppController` — and every menu handler is the same three steps: prompt
+through the view, call one controller method, hand its message back to the view.
 
 ```
-view/ConsoleView                         <- all terminal I/O
+view/ConsoleView  |  view/MainWindow      <- all user I/O (console and Qt)
       |
-controller/RepositoryManager             <- validation, orchestration, messages
+controller/AppController                 <- paths, validation, messages,
+      |                                     full snapshots, disk access
+controller/RepositoryManager             <- the bridge onto the model
       |
-model/Repository, DataManager, DiffEngine, AnalyticsEngine
-model/TrackedFile, Commit, StandardCommit, Validator
+model/Repository, DataManager, AnalyticsEngine
+model/TrackedFile, Commit, StandardCommit, DiffEngine, Validator
 ```
+
+Both front ends talk only to `AppController`, never to the model directly.
+`AppController` owns a `RepositoryManager` and hands every repository operation
+to it, adding on top the things an interface needs and a `bool` cannot carry:
+repository-relative path handling, a readable explanation of every outcome in
+`lastMessage()`, live field validation, carrying the previous commit's snapshot
+forward, creating and re-reading working files, and screening a save file before
+`DataManager` parses it.
 
 The menu:
 
 | # | Action | Exercises |
 |---|--------|-----------|
-| 1 | Track an existing file | `Repository::addFile`, `Validator::validateRepoPath` |
-| 2 | Create + track a new file | `Repository::writeFile` + `addFile` |
+| 1 | Track an existing file | `AppController::addFile`, `Validator::validateRepoPath` |
+| 2 | Create + track a new file | `AppController::createAndTrackFile` |
 | 3 | Stage file(s) (`all` supported) | `Repository::stageFile` |
 | 4 | Show status | `TrackedFile::Status`, `ConsoleView::formatStatusLine` |
 | 5 | Commit staged files | `StandardCommit`, `validateAuthor` / `validateMessage` |
@@ -282,7 +329,7 @@ The menu:
 | 8 | Show file content | `TrackedFile::getContent` |
 | 9 | Diff file vs commit | `DiffEngine::computeDiff` |
 | 10 | Restore file from commit | `Repository::restoreFile` (+ optional write to disk) |
-| 11 | Re-read file from disk | `Repository::refreshFile` |
+| 11 | Re-read file from disk | `AppController::refreshFile` |
 | 12 | Search commits | `RepositoryManager::searchCommits` |
 | 13 | Repository statistics | `AnalyticsEngine` |
 | 14 | Save repository | `DataManager::saveData` |
@@ -414,6 +461,6 @@ offscreen plugin renders without fonts, so text comes out as empty boxes.
 
 | Member | Responsibilities |
 |--------|------------------|
-| Andrei Cojocaru | Model layer: `Commit`, `StandardCommit`, `TrackedFile`, `DiffEngine`, `Validator` |
+| Andrei Cojocaru | Model layer: `Commit`, `StandardCommit`, `TrackedFile`, `DiffEngine` |
 | Omer Ozkaya | `Repository`, `RepositoryManager`, `DataManager`, `AnalyticsEngine` |
-| Bao Vo | GUI (`view/MainWindow` Qt front end + `view/ConsoleView`), `main.cpp`, `CMakeLists.txt`, `README.md`, testing, integration |
+| Bao Vo | GUI (`view/MainWindow` Qt front end + `view/ConsoleView`), `main.cpp`, `model/Validator`, `controller/AppController` (integration), `CMakeLists.txt`, `README.md`, all testing |

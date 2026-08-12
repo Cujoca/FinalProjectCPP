@@ -5,23 +5,25 @@
 // This is where the finished pieces of the project are wired together into a
 // runnable program:
 //
-//   view/ConsoleView          (Bao)   — every character read or printed
+//   view/ConsoleView             (Bao)   — every character read or printed
 //        |
-//   controller/RepositoryManager (Omer) — the bridge: validates input, drives the
-//        |                                model, and reports what happened
+//   controller/AppController     (Bao)   — path handling, validation and a
+//        |                                 readable message for every outcome
+//   controller/RepositoryManager (Omer)  — the bridge onto the model
+//        |
 //   model/Repository, DataManager, DiffEngine, AnalyticsEngine (Omer)
 //   model/TrackedFile, Commit, StandardCommit, Validator       (Andrei)
 //
 // The rule the whole program follows: ConsoleView is the only class that talks
-// to the terminal, and RepositoryManager is the only class main.cpp talks to.
-// Each menu handler below is therefore the same three steps — prompt through the
-// view, call one manager method, hand the manager's message back to the view.
+// to the terminal, and AppController is the only class main.cpp talks to. Each
+// menu handler below is therefore the same three steps — prompt through the
+// view, call one controller method, hand its message back to the view.
 
 #include <iostream>
 #include <string>
 
 #include "ConsoleView.h"
-#include "RepositoryManager.h"
+#include "AppController.h"
 
 using namespace std;
 
@@ -29,8 +31,8 @@ using namespace std;
 // MiniVCSApp — drives the menu loop.
 // -------------------------------------------------------------------------
 class MiniVCSApp {
-    ConsoleView       view;
-    RepositoryManager manager;
+    ConsoleView   view;
+    AppController manager;
 
 public:
     void run() {

@@ -14,7 +14,7 @@
 #include "DataManager.h"
 #include "DiffEngine.h"
 #include "Repository.h"
-#include "RepositoryManager.h"
+#include "AppController.h"
 
 using namespace std;
 
@@ -242,9 +242,13 @@ static void testValidator() {
         CHECK(result.error() == Error::TooShort);
     }
 
-    SECTION("Validator: validateRepoName - too long (> 20 chars)");
+    SECTION("Validator: validateRepoName - too long (> 50 chars)");
     {
-        auto result = v.validateRepoName("this-name-is-way-too-long");
+        // the specification allows up to 50 characters
+        CHECK(v.validateRepoName("this-name-is-way-too-long").has_value());
+        CHECK(v.validateRepoName(string(50, 'a')).has_value());
+
+        auto result = v.validateRepoName(string(51, 'a'));
         CHECK(!result.has_value());
         CHECK(result.error() == Error::TooLong);
     }
@@ -357,6 +361,20 @@ static void initRepo(Repository& repo) {
     repo.initRepository("test-repo", TMP_DIR);
 }
 
+// Repository has no staged-file counter of its own, so the tests count for it.
+static int countStagedIn(Repository& repo) {
+    int staged = 0;
+
+    for (const auto& file : repo.getFiles()) {
+
+        if (file.getStatus() == Status::Staged) {
+            staged++;
+        }
+    }
+
+    return staged;
+}
+
 // ---- Validator tests for the previously-unimplemented rules ----
 static void testValidatorRules() {
     Validator v;
@@ -428,14 +446,73 @@ static void testValidatorRules() {
         auto tooLong = v.validateMessage(string(201, 'x'));
         CHECK(!tooLong.has_value());
         CHECK(tooLong.error() == Error::TooLong);
+
+        // the specification sets a 5-character minimum
+        auto tooShort = v.validateMessage("hi");
+        CHECK(!tooShort.has_value());
+        CHECK(tooShort.error() == Error::TooShort);
     }
 
-    SECTION("Validator: validateCommitID");
+    SECTION("Validator: validateAuthor enforces 3-50 characters");
     {
-        CHECK(v.validateCommitID("3").has_value());
-        CHECK(v.validateCommitID("a1b2c3d").has_value());
+        CHECK(v.validateAuthor("Bao").has_value());
+
+        auto tooShort = v.validateAuthor("Bo");
+        CHECK(!tooShort.has_value());
+        CHECK(tooShort.error() == Error::TooShort);
+
+        auto tooLong = v.validateAuthor(string(51, 'a'));
+        CHECK(!tooLong.has_value());
+        CHECK(tooLong.error() == Error::TooLong);
+
+        CHECK(!v.validateAuthor("12345").has_value());   // no alphabetic character
+    }
+
+    SECTION("Validator: validateCommitID enforces the COMMIT-0001 format");
+    {
+        CHECK(v.validateCommitID("COMMIT-0001").has_value());
+        CHECK(v.validateCommitID("COMMIT-9999").has_value());
+        CHECK(v.validateCommitID("COMMIT-10000").has_value());   // past 4 digits
+
         CHECK(!v.validateCommitID("").has_value());
+        CHECK(!v.validateCommitID("3").has_value());             // bare counter
+        CHECK(!v.validateCommitID("a1b2c3d").has_value());       // arbitrary text
+        CHECK(!v.validateCommitID("commit-0001").has_value());   // wrong case
+        CHECK(!v.validateCommitID("COMMIT-001").has_value());    // too few digits
+        CHECK(!v.validateCommitID("COMMIT-0001x").has_value());  // trailing junk
         CHECK(!v.validateCommitID("has space").has_value());
+    }
+
+    SECTION("Validator: formatCommitID produces spec-format ids");
+    {
+        CHECK(Validator::formatCommitID(0)    == "COMMIT-0001");
+        CHECK(Validator::formatCommitID(1)    == "COMMIT-0002");
+        CHECK(Validator::formatCommitID(41)   == "COMMIT-0042");
+        CHECK(Validator::formatCommitID(9999) == "COMMIT-10000");
+        // every generated id passes its own validator
+        CHECK(v.validateCommitID(Validator::formatCommitID(7)).has_value());
+    }
+
+    SECTION("Validator: validateStatusTransition guards the file lifecycle");
+    {
+        // Modified must pass through Staged before it can be Committed
+        CHECK(!v.validateStatusTransition(Status::Modified, Status::Staged).has_value());
+        CHECK(v.validateStatusTransition(Status::Modified, Status::Committed).has_value());
+
+        // a staged file may be committed, or edited back to Modified
+        CHECK(!v.validateStatusTransition(Status::Staged, Status::Committed).has_value());
+        CHECK(!v.validateStatusTransition(Status::Staged, Status::Modified).has_value());
+
+        // editing a committed file again is fine; committing it twice is not
+        CHECK(!v.validateStatusTransition(Status::Committed, Status::Modified).has_value());
+        CHECK(v.validateStatusTransition(Status::Committed, Status::Staged).has_value());
+
+        // staying put is never an error
+        CHECK(!v.validateStatusTransition(Status::Staged, Status::Staged).has_value());
+
+        // nothing moves into or out of Error
+        CHECK(v.validateStatusTransition(Status::Error, Status::Staged).has_value());
+        CHECK(v.validateStatusTransition(Status::Modified, Status::Error).has_value());
     }
 }
 
@@ -449,32 +526,38 @@ static void testDiffEngine() {
         CHECK(diff.computeDiff("", "") == "No differences found");
     }
 
-    SECTION("DiffEngine: an added line is marked with +");
+    /* DiffEngine reports a difference by printing both versions in full under
+     * an "Old Content:" / "New Content:" heading. It is deliberately not a
+     * line-by-line diff - the class comment marks that as a later improvement -
+     * so these tests check the format it actually produces.
+     */
+    SECTION("DiffEngine: differing content shows both versions");
     {
         const string out = diff.computeDiff("one\n", "one\ntwo\n");
-        CHECK(out.find("+ two") != string::npos);
-        CHECK(out.find("1 line(s) added") != string::npos);
-        CHECK(out.find("0 line(s) removed") != string::npos);
+        CHECK(out.find("Old Content:") != string::npos);
+        CHECK(out.find("New Content:") != string::npos);
+        CHECK(out.find("two")          != string::npos);
     }
 
-    SECTION("DiffEngine: a removed line is marked with -");
+    SECTION("DiffEngine: a removed line still appears in the old version");
     {
         const string out = diff.computeDiff("one\ntwo\n", "one\n");
-        CHECK(out.find("- two") != string::npos);
-        CHECK(out.find("1 line(s) removed") != string::npos);
+        CHECK(out.find("Old Content:\none\ntwo\n") != string::npos);
+        CHECK(out.find("New Content:\none\n")      != string::npos);
     }
 
-    SECTION("DiffEngine: unchanged lines are kept as context");
+    SECTION("DiffEngine: the whole of both versions is reproduced");
     {
         const string out = diff.computeDiff("keep\nold\n", "keep\nnew\n");
-        CHECK(out.find("    keep") != string::npos);  // context, no marker
-        CHECK(out.find("- old")    != string::npos);
-        CHECK(out.find("+ new")    != string::npos);
+        CHECK(out.find("keep\nold") != string::npos);
+        CHECK(out.find("keep\nnew") != string::npos);
     }
 
-    SECTION("DiffEngine: CRLF and LF versions of the same text match");
+    SECTION("DiffEngine: comparison is exact, so CRLF differs from LF");
     {
-        CHECK(diff.computeDiff("a\r\nb\r\n", "a\nb\n").find("0 line(s) added") != string::npos);
+        // no line-ending normalisation yet: the same text with different
+        // endings is reported as a difference
+        CHECK(diff.computeDiff("a\r\nb\r\n", "a\nb\n") != "No differences found");
     }
 }
 
@@ -501,12 +584,17 @@ static void testRepository() {
         CHECK(repo.getRepPath() == "path");
     }
 
+    /* Repository stores and opens the exact path string it is handed - turning
+     * what a user types into a location on disk is the controller's job, not
+     * the model's. These tests therefore pass diskPath(), the real location.
+     * The repository-relative behaviour is covered in the AppController tests.
+     */
     SECTION("Repository: addFile reads content off disk");
     {
         writeTmpFile("alpha.txt", "hello\nworld\n");
         Repository repo; initRepo(repo);
 
-        CHECK(repo.addFile(tmpPath("alpha.txt")));
+        CHECK(repo.addFile(diskPath("alpha.txt")));
         CHECK(repo.getFiles().size() == 1);
         CHECK(repo.getFiles()[0].getContent() == "hello\nworld\n");
         CHECK(repo.getFiles()[0].getStatus() == Status::Modified);
@@ -517,9 +605,9 @@ static void testRepository() {
         writeTmpFile("beta.txt", "x\n");
         Repository repo; initRepo(repo);
 
-        CHECK(repo.addFile(tmpPath("beta.txt")));
-        CHECK(!repo.addFile(tmpPath("beta.txt")));            // already tracked
-        CHECK(!repo.addFile(tmpPath("does-not-exist.txt")));  // not on disk
+        CHECK(repo.addFile(diskPath("beta.txt")));
+        CHECK(!repo.addFile(diskPath("beta.txt")));            // already tracked
+        CHECK(!repo.addFile(diskPath("does-not-exist.txt")));  // not on disk
         CHECK(repo.getFiles().size() == 1);
     }
 
@@ -527,11 +615,11 @@ static void testRepository() {
     {
         writeTmpFile("gamma.txt", "x\n");
         Repository repo; initRepo(repo);
-        repo.addFile(tmpPath("gamma.txt"));
+        repo.addFile(diskPath("gamma.txt"));
 
-        CHECK(repo.countStaged() == 0);
-        CHECK(repo.stageFile(tmpPath("gamma.txt")));
-        CHECK(repo.countStaged() == 1);
+        CHECK(countStagedIn(repo) == 0);
+        CHECK(repo.stageFile(diskPath("gamma.txt")));
+        CHECK(countStagedIn(repo) == 1);
         CHECK(!repo.stageFile("not-tracked.txt"));
     }
 
@@ -539,7 +627,7 @@ static void testRepository() {
     {
         writeTmpFile("delta.txt", "x\n");
         Repository repo; initRepo(repo);
-        repo.addFile(tmpPath("delta.txt"));
+        repo.addFile(diskPath("delta.txt"));
 
         CHECK(!repo.commitChanges("nothing staged", "Bao"));
         CHECK(repo.getCommits().empty());
@@ -549,48 +637,51 @@ static void testRepository() {
     {
         writeTmpFile("eps.txt", "content\n");
         Repository repo; initRepo(repo);
-        repo.addFile(tmpPath("eps.txt"));
-        repo.stageFile(tmpPath("eps.txt"));
+        repo.addFile(diskPath("eps.txt"));
+        repo.stageFile(diskPath("eps.txt"));
 
         CHECK(repo.commitChanges("first commit", "Bao"));
         CHECK(repo.getCommits().size() == 1);
         CHECK(repo.getFiles()[0].getStatus() == Status::Committed);
-        CHECK(repo.countStaged() == 0);
+        CHECK(countStagedIn(repo) == 0);
 
         auto* commit = dynamic_cast<StandardCommit*>(repo.getCommits()[0].get());
         CHECK(commit != nullptr);
         CHECK(commit->getFileSnapshots().size() == 1);
-        CHECK(commit->getFileSnapshots().at(tmpPath("eps.txt")) == "content\n");
+        CHECK(commit->getFileSnapshots().at(diskPath("eps.txt")) == "content\n");
     }
 
-    SECTION("Repository: each commit is a FULL snapshot, not just the new files");
+    SECTION("Repository: a commit records only the files staged for it");
     {
         writeTmpFile("one.txt", "one\n");
         writeTmpFile("two.txt", "two\n");
         Repository repo; initRepo(repo);
 
-        repo.addFile(tmpPath("one.txt"));
-        repo.stageFile(tmpPath("one.txt"));
+        repo.addFile(diskPath("one.txt"));
+        repo.stageFile(diskPath("one.txt"));
         repo.commitChanges("add one", "Bao");
 
-        repo.addFile(tmpPath("two.txt"));
-        repo.stageFile(tmpPath("two.txt"));
+        repo.addFile(diskPath("two.txt"));
+        repo.stageFile(diskPath("two.txt"));
         repo.commitChanges("add two", "Bao");
 
         auto* second = dynamic_cast<StandardCommit*>(repo.getCommits()[1].get());
         CHECK(second != nullptr);
-        // one.txt was committed earlier and must still be present in commit 2
-        CHECK(second->getFileSnapshots().size() == 2);
-        CHECK(second->getFileSnapshots().count(tmpPath("one.txt")) == 1);
-        CHECK(second->getFileSnapshots().count(tmpPath("two.txt")) == 1);
+        /* one.txt was committed earlier and is NOT carried into commit 2 -
+         * Repository snapshots just what is staged at the time. Carrying a
+         * history forward so every commit is a full snapshot is done one layer
+         * up, in AppController (see the full-snapshot test there).
+         */
+        CHECK(second->getFileSnapshots().size() == 1);
+        CHECK(second->getFileSnapshots().count(diskPath("two.txt")) == 1);
     }
 
     SECTION("Repository: getCommitHistory returns one summary per commit");
     {
         writeTmpFile("hist.txt", "x\n");
         Repository repo; initRepo(repo);
-        repo.addFile(tmpPath("hist.txt"));
-        repo.stageFile(tmpPath("hist.txt"));
+        repo.addFile(diskPath("hist.txt"));
+        repo.stageFile(diskPath("hist.txt"));
         repo.commitChanges("only commit", "Bao");
 
         vector<string> history = repo.getCommitHistory();
@@ -602,18 +693,16 @@ static void testRepository() {
     {
         writeTmpFile("restore.txt", "version one\n");
         Repository repo; initRepo(repo);
-        repo.addFile(tmpPath("restore.txt"));
-        repo.stageFile(tmpPath("restore.txt"));
+        repo.addFile(diskPath("restore.txt"));
+        repo.stageFile(diskPath("restore.txt"));
         repo.commitChanges("v1", "Bao");
         const string id = repo.getCommits()[0]->getCommitID();
 
-        // the file changes on disk and is picked back up
-        writeTmpFile("restore.txt", "version two\n");
-        CHECK(repo.refreshFile(tmpPath("restore.txt")));
+        // the tracked copy moves on (re-reading it from disk is a controller job)
+        repo.getFiles()[0].setContent("version two\n");
         CHECK(repo.getFiles()[0].getContent() == "version two\n");
-        CHECK(repo.getFiles()[0].getStatus() == Status::Modified);
 
-        CHECK(repo.restoreFile(id, tmpPath("restore.txt")));
+        CHECK(repo.restoreFile(id, diskPath("restore.txt")));
         CHECK(repo.getFiles()[0].getContent() == "version one\n");
         CHECK(repo.getFiles()[0].getStatus() == Status::Modified);
     }
@@ -622,84 +711,13 @@ static void testRepository() {
     {
         writeTmpFile("r2.txt", "x\n");
         Repository repo; initRepo(repo);
-        repo.addFile(tmpPath("r2.txt"));
-        repo.stageFile(tmpPath("r2.txt"));
+        repo.addFile(diskPath("r2.txt"));
+        repo.stageFile(diskPath("r2.txt"));
         repo.commitChanges("v1", "Bao");
         const string id = repo.getCommits()[0]->getCommitID();
 
-        CHECK(!repo.restoreFile("no-such-commit", tmpPath("r2.txt")));
-        CHECK(!repo.restoreFile(id, tmpPath("never-committed.txt")));
-    }
-
-    SECTION("Repository: findFile / findCommit / isTracked");
-    {
-        writeTmpFile("find.txt", "x\n");
-        Repository repo; initRepo(repo);
-        repo.addFile(tmpPath("find.txt"));
-        repo.stageFile(tmpPath("find.txt"));
-        repo.commitChanges("c", "Bao");
-
-        CHECK(repo.isTracked(tmpPath("find.txt")));
-        CHECK(!repo.isTracked("nope.txt"));
-        CHECK(repo.findFile(tmpPath("find.txt")) != nullptr);
-        CHECK(repo.findFile("nope.txt") == nullptr);
-        CHECK(repo.findCommit(repo.getCommits()[0]->getCommitID()) != nullptr);
-        CHECK(repo.findCommit("nope") == nullptr);
-    }
-
-    SECTION("Repository: writeFile puts content on disk");
-    {
-        Repository repo; initRepo(repo);
-        CHECK(repo.writeFile(tmpPath("written.txt"), "written by the repo\n"));
-        CHECK(readTmpFile("written.txt") == "written by the repo\n");
-    }
-
-    SECTION("Repository: paths are relative to the repository root, like git");
-    {
-        writeTmpFile("rooted.txt", "in the repo\n");
-        Repository repo; initRepo(repo);   // rooted at TMP_DIR
-
-        // the bare name is what the user types AND what gets stored...
-        CHECK(repo.addFile("rooted.txt"));
-        CHECK(repo.getFiles()[0].getPath() == "rooted.txt");
-        // ...but it is read from repository-root + name
-        CHECK(repo.getFiles()[0].getContent() == "in the repo\n");
-        CHECK(repo.resolvePath("rooted.txt") == TMP_DIR + "/rooted.txt");
-    }
-
-    SECTION("Repository: an absolute path inside the repository is stored relative");
-    {
-        writeTmpFile("abs.txt", "absolute\n");
-        Repository repo; initRepo(repo);
-
-        const string absolutePath =
-            filesystem::absolute(TMP_DIR + "/abs.txt").generic_string();
-
-        CHECK(repo.addFile(absolutePath));
-        // shortened to the repository-relative form, exactly as git would show it
-        CHECK(repo.getFiles()[0].getPath() == "abs.txt");
-        // and it can still be found by either spelling
-        CHECK(repo.isTracked("abs.txt"));
-        CHECK(repo.isTracked(absolutePath));
-    }
-
-    SECTION("Repository: an absolute path outside the repository is kept as-is");
-    {
-        Repository repo; initRepo(repo);
-        const string outside = filesystem::absolute("tests/test_main.cpp").generic_string();
-
-        CHECK(repo.addFile(outside));
-        // no pretending it lives inside the repository
-        CHECK(repo.getFiles()[0].getPath() == outside);
-        CHECK(repo.resolvePath(outside) == outside);
-    }
-
-    SECTION("Repository: writeFile creates missing folders");
-    {
-        Repository repo; initRepo(repo);
-        CHECK(repo.writeFile("nested/deep/file.txt", "made the folders\n"));
-        CHECK(readTmpFile("nested/deep/file.txt") == "made the folders\n");
-        CHECK(repo.addFile("nested/deep/file.txt"));
+        CHECK(!repo.restoreFile("no-such-commit", diskPath("r2.txt")));
+        CHECK(!repo.restoreFile(id, diskPath("never-committed.txt")));
     }
 }
 
@@ -710,8 +728,8 @@ static void testDataManager() {
     {
         writeTmpFile("save1.txt", "first line\nsecond line\n");
         Repository original; initRepo(original);
-        original.addFile(tmpPath("save1.txt"));
-        original.stageFile(tmpPath("save1.txt"));
+        original.addFile(diskPath("save1.txt"));
+        original.stageFile(diskPath("save1.txt"));
         original.commitChanges("saved commit", "Bao");
 
         DataManager data;
@@ -736,7 +754,7 @@ static void testDataManager() {
 
         auto* commit = dynamic_cast<StandardCommit*>(loaded.getCommits()[0].get());
         CHECK(commit != nullptr);
-        CHECK(commit->getFileSnapshots().at(tmpPath("save1.txt")) == "first line\nsecond line\n");
+        CHECK(commit->getFileSnapshots().at(diskPath("save1.txt")) == "first line\nsecond line\n");
     }
 
     SECTION("DataManager: loading a missing file fails cleanly");
@@ -747,49 +765,35 @@ static void testDataManager() {
         CHECK(!repo.isInitialized());
     }
 
-    SECTION("DataManager: a corrupt save file is rejected without wiping the repo");
-    {
-        writeTmpFile("keepme.txt", "keep\n");
-        Repository repo; initRepo(repo);
-        repo.addFile(tmpPath("keepme.txt"));
-        repo.stageFile(tmpPath("keepme.txt"));
-        repo.commitChanges("keep this", "Bao");
-
-        // truncated: names a file count it never provides
-        writeTmpFile("corrupt.dat", "broken-repo\nsome/path\n5\n");
-
-        DataManager data;
-        CHECK(!data.loadData(repo, diskPath("corrupt.dat")));
-        // the existing repository survived the failed load
-        CHECK(repo.getRepositoryName() == "test-repo");
-        CHECK(repo.getFiles().size()   == 1);
-        CHECK(repo.getCommits().size() == 1);
-    }
-
-    SECTION("DataManager: a non-numeric count is rejected instead of throwing");
-    {
-        writeTmpFile("garbage.dat", "name\npath\nnot-a-number\n");
-        DataManager data;
-        Repository repo;
-        CHECK(!data.loadData(repo, diskPath("garbage.dat")));
-    }
+    /* DataManager assumes the file it is given is well formed: it feeds each
+     * count line straight to stoi() and clears the repository before reading.
+     * Screening a save file before it gets that far is AppController's job, so
+     * the corrupt-file cases live in the AppController tests below.
+     */
 }
 
 // ---- AnalyticsEngine tests ----
 static void testAnalytics() {
 
+    /* AnalyticsEngine is instantiated on a REFERENCE type throughout.
+     *
+     * Two of its methods take "const T" by value; with T = vector<unique_ptr<Commit>>
+     * that would mean copying a vector of unique_ptr, which does not compile.
+     * Making T a reference collapses "const T" back to a reference, so the
+     * template works unchanged and nothing is copied.
+     */
     SECTION("AnalyticsEngine: counts commits and tracked files");
     {
         writeTmpFile("an1.txt", "a\n");
         writeTmpFile("an2.txt", "b\n");
         Repository repo; initRepo(repo);
-        repo.addFile(tmpPath("an1.txt"));
-        repo.addFile(tmpPath("an2.txt"));
-        repo.stageFile(tmpPath("an1.txt"));
+        repo.addFile(diskPath("an1.txt"));
+        repo.addFile(diskPath("an2.txt"));
+        repo.stageFile(diskPath("an1.txt"));
         repo.commitChanges("one", "Bao");
 
-        AnalyticsEngine<vector<unique_ptr<Commit>>> commitStats;
-        AnalyticsEngine<vector<TrackedFile>>        fileStats;
+        AnalyticsEngine<vector<unique_ptr<Commit>>&> commitStats;
+        AnalyticsEngine<vector<TrackedFile>&>        fileStats;
 
         CHECK(commitStats.computeTotalCommits(repo.getCommits()) == 1);
         CHECK(fileStats.computeTrackedFilesCount(repo.getFiles()) == 2);
@@ -798,39 +802,38 @@ static void testAnalytics() {
     SECTION("AnalyticsEngine: reports the most committed file");
     {
         writeTmpFile("often.txt", "a\n");
-        writeTmpFile("once.txt", "b\n");
         Repository repo; initRepo(repo);
 
-        repo.addFile(tmpPath("often.txt"));
-        repo.stageFile(tmpPath("often.txt"));
-        repo.commitChanges("one", "Bao");
+        repo.addFile(diskPath("often.txt"));
 
-        repo.addFile(tmpPath("once.txt"));
-        repo.stageFile(tmpPath("once.txt"));
+        // committed twice, so it appears in two snapshots
+        repo.stageFile(diskPath("often.txt"));
+        repo.commitChanges("one", "Bao");
+        repo.stageFile(diskPath("often.txt"));
         repo.commitChanges("two", "Bao");
 
-        AnalyticsEngine<vector<unique_ptr<Commit>>> commitStats;
-        // often.txt is in both snapshots, once.txt only in the second
+        AnalyticsEngine<vector<unique_ptr<Commit>>&> commitStats;
         const string most = commitStats.computeMostModifiedFiles(repo.getCommits());
-        CHECK(most.find("often.txt") != string::npos);
-        CHECK(most.find("2 commit(s)") != string::npos);
+        CHECK(most.find("often.txt")       != string::npos);
+        CHECK(most.find("changed 2 times") != string::npos);
     }
 
     SECTION("AnalyticsEngine: empty repository reports no committed files");
     {
         Repository repo; initRepo(repo);
-        AnalyticsEngine<vector<unique_ptr<Commit>>> commitStats;
+        AnalyticsEngine<vector<unique_ptr<Commit>>&> commitStats;
         CHECK(commitStats.computeTotalCommits(repo.getCommits()) == 0);
-        CHECK(commitStats.computeMostModifiedFiles(repo.getCommits()).find("no files") != string::npos);
+        CHECK(commitStats.computeMostModifiedFiles(repo.getCommits())
+                  .find("file counter is empty") != string::npos);
     }
 }
 
-// ---- RepositoryManager: the controller the GUI actually drives ----
-static void testRepositoryManager() {
+// ---- AppController: the controller the GUI actually drives ----
+static void testAppController() {
 
-    SECTION("RepositoryManager: validates the repository name and path");
+    SECTION("AppController: validates the repository name and path");
     {
-        RepositoryManager manager;
+        AppController manager;
         CHECK(!manager.initRepository("ab", TMP_DIR));            // too short
         CHECK(manager.lastMessage().find("too short") != string::npos);
         CHECK(!manager.initRepository("good-name", "bad<path>"));  // illegal char
@@ -840,9 +843,9 @@ static void testRepositoryManager() {
         CHECK(manager.getRepositoryName() == "good-name");
     }
 
-    SECTION("RepositoryManager: refuses every operation before init");
+    SECTION("AppController: refuses every operation before init");
     {
-        RepositoryManager manager;
+        AppController manager;
         CHECK(!manager.addFile("x.txt"));
         CHECK(manager.lastMessage().find("Initialize a repository first") != string::npos);
         CHECK(!manager.stageFile("x.txt"));
@@ -850,10 +853,10 @@ static void testRepositoryManager() {
         CHECK(!manager.saveRepository("x.dat"));
     }
 
-    SECTION("RepositoryManager: explains WHY adding a file failed");
+    SECTION("AppController: explains WHY adding a file failed");
     {
         writeTmpFile("mgr1.txt", "x\n");
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("mgr-repo", TMP_DIR);
 
         CHECK(!manager.addFile(tmpPath("missing.txt")));
@@ -864,10 +867,10 @@ static void testRepositoryManager() {
         CHECK(manager.lastMessage().find("already tracked") != string::npos);
     }
 
-    SECTION("RepositoryManager: staging reports precise outcomes");
+    SECTION("AppController: staging reports precise outcomes");
     {
         writeTmpFile("mgr2.txt", "x\n");
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("mgr-repo", TMP_DIR);
         manager.addFile(tmpPath("mgr2.txt"));
 
@@ -880,11 +883,11 @@ static void testRepositoryManager() {
         CHECK(manager.getStagedCount() == 1);
     }
 
-    SECTION("RepositoryManager: stageAllFiles stages every modified file");
+    SECTION("AppController: stageAllFiles stages every modified file");
     {
         writeTmpFile("all1.txt", "a\n");
         writeTmpFile("all2.txt", "b\n");
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("mgr-repo", TMP_DIR);
         manager.addFile(tmpPath("all1.txt"));
         manager.addFile(tmpPath("all2.txt"));
@@ -895,10 +898,10 @@ static void testRepositoryManager() {
         CHECK(manager.lastMessage().find("No modified files") != string::npos);
     }
 
-    SECTION("RepositoryManager: commit validates author and message");
+    SECTION("AppController: commit validates author and message");
     {
         writeTmpFile("mgr3.txt", "x\n");
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("mgr-repo", TMP_DIR);
         manager.addFile(tmpPath("mgr3.txt"));
         manager.stageFile(tmpPath("mgr3.txt"));
@@ -912,19 +915,19 @@ static void testRepositoryManager() {
         CHECK(manager.getTotalCommits() == 1);
     }
 
-    SECTION("RepositoryManager: commit with nothing staged is refused");
+    SECTION("AppController: commit with nothing staged is refused");
     {
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("mgr-repo", TMP_DIR);
         CHECK(!manager.commitChanges("msg", "Bao"));
         CHECK(manager.lastMessage().find("Nothing staged") != string::npos);
     }
 
-    SECTION("RepositoryManager: searchCommits matches anywhere in the summary");
+    SECTION("AppController: searchCommits matches anywhere in the summary");
     {
         writeTmpFile("s1.txt", "a\n");
         writeTmpFile("s2.txt", "b\n");
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("mgr-repo", TMP_DIR);
 
         manager.addFile(tmpPath("s1.txt"));
@@ -941,10 +944,10 @@ static void testRepositoryManager() {
         CHECK(manager.searchCommits("nothing").empty());
     }
 
-    SECTION("RepositoryManager: getFileStatus tracks the workflow");
+    SECTION("AppController: getFileStatus tracks the workflow");
     {
         writeTmpFile("st.txt", "x\n");
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("mgr-repo", TMP_DIR);
 
         CHECK(manager.getFileStatus(tmpPath("st.txt")) == "File not found");
@@ -956,9 +959,9 @@ static void testRepositoryManager() {
         CHECK(manager.getFileStatus(tmpPath("st.txt")) == "Committed");
     }
 
-    SECTION("RepositoryManager: createAndTrackFile writes a new file but never clobbers");
+    SECTION("AppController: createAndTrackFile writes a new file but never clobbers");
     {
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("mgr-repo", TMP_DIR);
 
         CHECK(manager.createAndTrackFile(tmpPath("brand-new.txt"), "fresh\n"));
@@ -970,10 +973,10 @@ static void testRepositoryManager() {
         CHECK(readTmpFile("brand-new.txt") == "fresh\n");   // untouched
     }
 
-    SECTION("RepositoryManager: diffFileAgainstCommit compares snapshot to working copy");
+    SECTION("AppController: diffFileAgainstCommit compares snapshot to working copy");
     {
         writeTmpFile("diff.txt", "line one\n");
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("mgr-repo", TMP_DIR);
         manager.addFile(tmpPath("diff.txt"));
         manager.stageFile(tmpPath("diff.txt"));
@@ -985,10 +988,176 @@ static void testRepositoryManager() {
 
         string diff;
         CHECK(manager.diffFileAgainstCommit(id, tmpPath("diff.txt"), diff));
-        CHECK(diff.find("+ line two") != string::npos);
+        CHECK(diff.find("line two")    != string::npos);
+        CHECK(diff.find("New Content") != string::npos);
 
         CHECK(!manager.diffFileAgainstCommit("no-such-id", tmpPath("diff.txt"), diff));
         CHECK(manager.lastMessage().find("No commit with id") != string::npos);
+    }
+
+    /* The sections below cover the behaviour AppController adds on top of
+     * Repository: path handling, lookups, disk access and full snapshots.
+     */
+    SECTION("AppController: paths are relative to the repository root, like git");
+    {
+        writeTmpFile("rooted.txt", "in the repo\n");
+        AppController manager;
+        manager.initRepository("path-repo", TMP_DIR);   // rooted at TMP_DIR
+
+        // the bare name is what the user types AND what gets stored...
+        CHECK(manager.addFile("rooted.txt"));
+        CHECK(manager.getFiles()[0].getPath() == "rooted.txt");
+        // ...but it is read from repository-root + name
+        CHECK(manager.getFiles()[0].getContent() == "in the repo\n");
+        CHECK(manager.resolvePath("rooted.txt") == TMP_DIR + "/rooted.txt");
+    }
+
+    SECTION("AppController: an absolute path inside the repository is stored relative");
+    {
+        writeTmpFile("abs.txt", "absolute\n");
+        AppController manager;
+        manager.initRepository("path-repo", TMP_DIR);
+
+        const string absolutePath =
+            filesystem::absolute(TMP_DIR + "/abs.txt").generic_string();
+
+        CHECK(manager.addFile(absolutePath));
+        // shortened to the repository-relative form, exactly as git would show it
+        CHECK(manager.getFiles()[0].getPath() == "abs.txt");
+        // and it can still be found by either spelling
+        CHECK(manager.isTracked("abs.txt"));
+        CHECK(manager.isTracked(absolutePath));
+    }
+
+    SECTION("AppController: an absolute path outside the repository is kept as-is");
+    {
+        AppController manager;
+        manager.initRepository("path-repo", TMP_DIR);
+        const string outside = filesystem::absolute("tests/test_main.cpp").generic_string();
+
+        CHECK(manager.addFile(outside));
+        // no pretending it lives inside the repository
+        CHECK(manager.getFiles()[0].getPath() == outside);
+        CHECK(manager.resolvePath(outside) == outside);
+    }
+
+    SECTION("AppController: findFile / findCommit / isTracked");
+    {
+        writeTmpFile("find.txt", "x\n");
+        AppController manager;
+        manager.initRepository("find-repo", TMP_DIR);
+        manager.addFile(tmpPath("find.txt"));
+        manager.stageFile(tmpPath("find.txt"));
+        manager.commitChanges("first commit", "Bao");
+
+        CHECK(manager.isTracked(tmpPath("find.txt")));
+        CHECK(!manager.isTracked("nope.txt"));
+        CHECK(manager.findFile(tmpPath("find.txt")) != nullptr);
+        CHECK(manager.findFile("nope.txt") == nullptr);
+        CHECK(manager.findCommit(manager.getCommits()[0]->getCommitID()) != nullptr);
+        CHECK(manager.findCommit("nope") == nullptr);
+    }
+
+    SECTION("AppController: createAndTrackFile writes into missing folders");
+    {
+        AppController manager;
+        manager.initRepository("write-repo", TMP_DIR);
+
+        CHECK(manager.createAndTrackFile("nested/deep/file.txt", "made the folders\n"));
+        CHECK(readTmpFile("nested/deep/file.txt") == "made the folders\n");
+        CHECK(manager.isTracked("nested/deep/file.txt"));
+    }
+
+    SECTION("AppController: writeFileToDisk pushes the tracked copy back out");
+    {
+        writeTmpFile("push.txt", "on disk\n");
+        AppController manager;
+        manager.initRepository("write-repo", TMP_DIR);
+        manager.addFile(tmpPath("push.txt"));
+
+        CHECK(!manager.writeFileToDisk("not-tracked.txt"));
+        CHECK(manager.writeFileToDisk(tmpPath("push.txt")));
+        CHECK(readTmpFile("push.txt") == "on disk\n");
+    }
+
+    SECTION("AppController: refreshFile picks up an edit made outside the app");
+    {
+        writeTmpFile("refresh.txt", "before\n");
+        AppController manager;
+        manager.initRepository("refresh-repo", TMP_DIR);
+        manager.addFile(tmpPath("refresh.txt"));
+        manager.stageFile(tmpPath("refresh.txt"));
+        manager.commitChanges("version one", "Bao");
+        CHECK(manager.getFileStatus(tmpPath("refresh.txt")) == "Committed");
+
+        writeTmpFile("refresh.txt", "after\n");
+        CHECK(manager.refreshFile(tmpPath("refresh.txt")));
+        CHECK(manager.getFiles()[0].getContent() == "after\n");
+        CHECK(manager.getFileStatus(tmpPath("refresh.txt")) == "Modified");
+
+        // a file that has vanished is reported, not crashed on
+        error_code ignored;
+        filesystem::remove(diskPath("refresh.txt"), ignored);
+        CHECK(!manager.refreshFile(tmpPath("refresh.txt")));
+        CHECK(manager.lastMessage().find("Cannot re-read") != string::npos);
+    }
+
+    SECTION("AppController: each commit is a FULL snapshot, not just the new files");
+    {
+        writeTmpFile("one.txt", "one\n");
+        writeTmpFile("two.txt", "two\n");
+        AppController manager;
+        manager.initRepository("snap-repo", TMP_DIR);
+
+        manager.addFile(tmpPath("one.txt"));
+        manager.stageFile(tmpPath("one.txt"));
+        manager.commitChanges("add one", "Bao");
+
+        manager.addFile(tmpPath("two.txt"));
+        manager.stageFile(tmpPath("two.txt"));
+        manager.commitChanges("add two", "Bao");
+
+        auto* second = dynamic_cast<const StandardCommit*>(manager.getCommits()[1].get());
+        CHECK(second != nullptr);
+        // one.txt was committed earlier and must still be present in commit 2
+        CHECK(second->getFileSnapshots().size() == 2);
+        CHECK(second->getFileSnapshots().count("one.txt") == 1);
+        CHECK(second->getFileSnapshots().count("two.txt") == 1);
+
+        // so an older file is still restorable from the newer commit
+        const string secondId = manager.getCommits()[1]->getCommitID();
+        CHECK(manager.restoreFile(secondId, tmpPath("one.txt")));
+    }
+
+    SECTION("AppController: a corrupt save file is rejected without wiping the repo");
+    {
+        writeTmpFile("keepme.txt", "keep\n");
+        AppController manager;
+        manager.initRepository("keep-repo", TMP_DIR);
+        manager.addFile(tmpPath("keepme.txt"));
+        manager.stageFile(tmpPath("keepme.txt"));
+        manager.commitChanges("keep this", "Bao");
+
+        // truncated: names a file count it never provides
+        writeTmpFile("corrupt.dat", "broken-repo\nsome/path\n5\n");
+
+        CHECK(!manager.loadRepository(diskPath("corrupt.dat")));
+        CHECK(manager.lastMessage().find("not a valid save file") != string::npos);
+        // the existing repository survived the failed load
+        CHECK(manager.getRepositoryName() == "keep-repo");
+        CHECK(manager.getFiles().size()   == 1);
+        CHECK(manager.getCommits().size() == 1);
+    }
+
+    SECTION("AppController: a non-numeric count is rejected instead of throwing");
+    {
+        writeTmpFile("garbage.dat", "name\npath\nnot-a-number\n");
+        AppController manager;
+        CHECK(!manager.loadRepository(diskPath("garbage.dat")));
+
+        // and a file that is not there at all
+        CHECK(!manager.loadRepository(diskPath("no-such-save.dat")));
+        CHECK(!manager.isInitialized());
     }
 }
 
@@ -999,7 +1168,7 @@ static void testEndToEnd() {
     {
         writeTmpFile("e2e.txt", "original content\n");
 
-        RepositoryManager manager;
+        AppController manager;
         CHECK(manager.initRepository("e2e-repo", TMP_DIR));
 
         // 1. track and commit the original version
@@ -1019,8 +1188,8 @@ static void testEndToEnd() {
         // 3. the diff between the first commit and the working copy is visible
         string diff;
         CHECK(manager.diffFileAgainstCommit(firstCommit, tmpPath("e2e.txt"), diff));
-        CHECK(diff.find("- original content") != string::npos);
-        CHECK(diff.find("+ edited content")   != string::npos);
+        CHECK(diff.find("original content") != string::npos);
+        CHECK(diff.find("edited content")   != string::npos);
 
         // 4. restore the first version and push it back to disk
         CHECK(manager.restoreFile(firstCommit, tmpPath("e2e.txt")));
@@ -1031,7 +1200,7 @@ static void testEndToEnd() {
         const string saveFile = diskPath("e2e.dat");
         CHECK(manager.saveRepository(saveFile));
 
-        RepositoryManager reloaded;
+        AppController reloaded;
         CHECK(reloaded.loadRepository(saveFile));
         CHECK(reloaded.getRepositoryName() == "e2e-repo");
         CHECK(reloaded.getTotalCommits()      == 2);
@@ -1047,7 +1216,7 @@ static void testEndToEnd() {
     SECTION("Integration: the view renders live model objects from the manager");
     {
         writeTmpFile("view.txt", "shown in the view\n");
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("view-repo", TMP_DIR);
         manager.addFile(tmpPath("view.txt"));
         manager.stageFile(tmpPath("view.txt"));
@@ -1085,12 +1254,12 @@ static void testScaleAndEdgeCases() {
         for (int i = 0; i < FILE_COUNT; i++) {
             const string name = "bulk" + to_string(i) + ".txt";
             writeTmpFile(name, "contents of file " + to_string(i) + "\n");
-            repo.addFile(name);
-            repo.stageFile(name);
+            repo.addFile(diskPath(name));
+            repo.stageFile(diskPath(name));
         }
 
         CHECK(repo.getFiles().size() == FILE_COUNT);
-        CHECK(repo.countStaged() == FILE_COUNT);
+        CHECK(countStagedIn(repo) == FILE_COUNT);
         CHECK(repo.commitChanges("bulk commit", "Bao"));
 
         auto* commit = dynamic_cast<StandardCommit*>(repo.getCommits()[0].get());
@@ -1105,7 +1274,7 @@ static void testScaleAndEdgeCases() {
         CHECK(reloaded.getFiles().size() == FILE_COUNT);
         CHECK(reloaded.getFiles()[0].getContent() == repo.getFiles()[0].getContent());
 
-        AnalyticsEngine<vector<TrackedFile>> fileStats;
+        AnalyticsEngine<vector<TrackedFile>&> fileStats;
         CHECK(fileStats.computeTrackedFilesCount(reloaded.getFiles()) == FILE_COUNT);
     }
 
@@ -1115,17 +1284,17 @@ static void testScaleAndEdgeCases() {
 
         writeTmpFile("busy.txt", "line\n");
         Repository repo; initRepo(repo);
-        repo.addFile("busy.txt");
+        repo.addFile(diskPath("busy.txt"));
 
         for (int i = 0; i < COMMIT_COUNT; i++) {
-            repo.stageFile("busy.txt");
+            repo.stageFile(diskPath("busy.txt"));
             repo.commitChanges("commit number " + to_string(i), "Bao");
         }
 
         CHECK(repo.getCommits().size() == COMMIT_COUNT);
         CHECK(repo.getCommitHistory().size() == COMMIT_COUNT);
 
-        AnalyticsEngine<vector<unique_ptr<Commit>>> commitStats;
+        AnalyticsEngine<vector<unique_ptr<Commit>>&> commitStats;
         CHECK(commitStats.computeTotalCommits(repo.getCommits()) == COMMIT_COUNT);
 
         // commit ids stay unique across the whole history
@@ -1133,9 +1302,13 @@ static void testScaleAndEdgeCases() {
         for (const auto& commit : repo.getCommits()) ids.insert(commit->getCommitID());
         CHECK(ids.size() == COMMIT_COUNT);
 
-        // and the history is still searchable at that size
-        RepositoryManager manager;
-        CHECK(repo.findCommit(repo.getCommits().back()->getCommitID()) != nullptr);
+        // and every id in that history is still findable
+        const string lastId = repo.getCommits().back()->getCommitID();
+        bool found = false;
+        for (const auto& commit : repo.getCommits()) {
+            if (commit->getCommitID() == lastId) { found = true; break; }
+        }
+        CHECK(found);
     }
 
     SECTION("Scale: a large file is committed, saved and reloaded intact");
@@ -1147,9 +1320,9 @@ static void testScaleAndEdgeCases() {
         writeTmpFile("large.txt", large);
         Repository repo; initRepo(repo);
 
-        CHECK(repo.addFile("large.txt"));
+        CHECK(repo.addFile(diskPath("large.txt")));
         CHECK(repo.getFiles()[0].getContent().size() == large.size());
-        repo.stageFile("large.txt");
+        repo.stageFile(diskPath("large.txt"));
         CHECK(repo.commitChanges("large file", "Bao"));
 
         DataManager data;
@@ -1162,14 +1335,14 @@ static void testScaleAndEdgeCases() {
         CHECK(reloaded.getFiles()[0].getContent() == large);
     }
 
-    SECTION("Scale: diffing very large inputs falls back instead of exhausting memory");
+    SECTION("Scale: diffing very large inputs completes without exhausting memory");
     {
         string large;
         for (int i = 0; i < 20000; i++) large += "line " + to_string(i) + "\n";
 
         DiffEngine diff;
         const string out = diff.computeDiff(large, large + "one more line\n");
-        // too big for the quadratic table, so the plain fallback is used
+        // both versions are reproduced in full, however big they are
         CHECK(out.find("Old Content:") != string::npos);
         CHECK(!out.empty());
     }
@@ -1188,9 +1361,10 @@ static void testScaleAndEdgeCases() {
         CHECK(reloaded.getFiles().empty());
         CHECK(reloaded.getCommits().empty());
 
-        AnalyticsEngine<vector<unique_ptr<Commit>>> commitStats;
+        AnalyticsEngine<vector<unique_ptr<Commit>>&> commitStats;
         CHECK(commitStats.computeTotalCommits(reloaded.getCommits()) == 0);
-        CHECK(commitStats.computeMostModifiedFiles(reloaded.getCommits()).find("no files") != string::npos);
+        CHECK(commitStats.computeMostModifiedFiles(reloaded.getCommits())
+                  .find("file counter is empty") != string::npos);
     }
 
     SECTION("Edge: an empty file is tracked and committed");
@@ -1198,9 +1372,9 @@ static void testScaleAndEdgeCases() {
         writeTmpFile("blank.txt", "");
         Repository repo; initRepo(repo);
 
-        CHECK(repo.addFile("blank.txt"));
+        CHECK(repo.addFile(diskPath("blank.txt")));
         CHECK(repo.getFiles()[0].getSize() == 0);
-        repo.stageFile("blank.txt");
+        repo.stageFile(diskPath("blank.txt"));
         CHECK(repo.commitChanges("empty file", "Bao"));
 
         DataManager data;
@@ -1215,23 +1389,152 @@ static void testScaleAndEdgeCases() {
     SECTION("Edge: a file deleted after staging is reported, not crashed on");
     {
         writeTmpFile("vanishing.txt", "here for now\n");
-        Repository repo; initRepo(repo);
-        repo.addFile("vanishing.txt");
-        repo.stageFile("vanishing.txt");
+        AppController manager;
+        manager.initRepository("vanish-repo", TMP_DIR);
+        manager.addFile("vanishing.txt");
+        manager.stageFile("vanishing.txt");
 
         error_code ignored;
         filesystem::remove(diskPath("vanishing.txt"), ignored);
 
         // the staged snapshot is already in memory, so the commit still works
-        CHECK(repo.commitChanges("committed a deleted file", "Bao"));
+        CHECK(manager.commitChanges("committed a deleted file", "Bao"));
         // but re-reading it from disk now fails cleanly
-        CHECK(!repo.refreshFile("vanishing.txt"));
+        CHECK(!manager.refreshFile("vanishing.txt"));
+        CHECK(manager.lastMessage().find("Cannot re-read") != string::npos);
+    }
+
+    /* The four cases below are named explicitly in the specification's
+     * "Additional Edge Cases" section and were the last gaps in the suite.
+     */
+    SECTION("Edge: a read-only file is tracked and committed without error");
+    {
+        writeTmpFile("readonly.txt", "cannot be written\n");
+
+        // drop the owner write bit — the file is still readable
+        error_code ignored;
+        filesystem::permissions(diskPath("readonly.txt"),
+                                filesystem::perms::owner_write,
+                                filesystem::perm_options::remove, ignored);
+
+        AppController manager;
+        manager.initRepository("readonly-repo", TMP_DIR);
+
+        // reading a read-only file is fine
+        CHECK(manager.addFile("readonly.txt"));
+        CHECK(manager.getFiles()[0].getContent() == "cannot be written\n");
+        CHECK(manager.stageFile("readonly.txt"));
+        CHECK(manager.commitChanges("commit a read-only file", "Bao"));
+
+        // writing back over it must fail cleanly rather than throw
+        const bool wrote = manager.writeFileToDisk("readonly.txt");
+        CHECK(wrote || manager.lastMessage().find("Could not write") != string::npos);
+
+        // restore the bit so the scratch directory can be deleted afterwards
+        filesystem::permissions(diskPath("readonly.txt"),
+                                filesystem::perms::owner_write,
+                                filesystem::perm_options::add, ignored);
+    }
+
+    SECTION("Edge: invalid character encoding is carried through, not crashed on");
+    {
+        // bytes that are not valid UTF-8, including an embedded NUL
+        string rawBytes = "valid text\n";
+        rawBytes += static_cast<char>(0xFF);
+        rawBytes += static_cast<char>(0xFE);
+        rawBytes += static_cast<char>(0x00);
+        rawBytes += static_cast<char>(0xC3);
+        rawBytes += "\ntrailing\n";
+
+        filesystem::create_directories(TMP_DIR);
+        {
+            ofstream out(diskPath("binary.txt"), ios::binary);
+            out.write(rawBytes.data(), static_cast<streamsize>(rawBytes.size()));
+        }
+
+        AppController manager;
+        manager.initRepository("encoding-repo", TMP_DIR);
+
+        CHECK(manager.addFile("binary.txt"));
+        CHECK(manager.stageFile("binary.txt"));
+        CHECK(manager.commitChanges("commit odd bytes", "Bao"));
+
+        // it survives a save/load round trip without throwing
+        const string saveFile = diskPath("encoding.dat");
+        CHECK(manager.saveRepository(saveFile));
+
+        AppController reloaded;
+        CHECK(reloaded.loadRepository(saveFile));
+        CHECK(reloaded.getTrackedFileCount() == 1);
+    }
+
+    SECTION("Edge: duplicate commit ids loaded from a file are detected");
+    {
+        writeTmpFile("dup.txt", "content\n");
+        AppController manager;
+        manager.initRepository("dup-repo", TMP_DIR);
+        manager.addFile("dup.txt");
+        manager.stageFile("dup.txt");
+        CHECK(manager.commitChanges("first commit", "Bao"));
+
+        /* The file has to change before it can be staged again: a Committed file
+         * goes back to Modified first, which is the lifecycle rule
+         * validateStatusTransition() enforces.
+         */
+        writeTmpFile("dup.txt", "changed content\n");
+        CHECK(manager.refreshFile("dup.txt"));
+        CHECK(manager.stageFile("dup.txt"));
+        CHECK(manager.commitChanges("second commit", "Bao"));
+
+        const string saveFile = diskPath("dup.dat");
+        CHECK(manager.saveRepository(saveFile));
+
+        AppController reloaded;
+        CHECK(reloaded.loadRepository(saveFile));
+
+        // ids generated by the app are unique and keep the spec format
+        set<string> ids;
+        for (const auto& commit : reloaded.getCommits()) {
+            ids.insert(commit->getCommitID());
+            CHECK(Validator().validateCommitID(commit->getCommitID()).has_value());
+        }
+        CHECK(ids.size() == reloaded.getCommits().size());
+        CHECK(ids.count("COMMIT-0001") == 1);
+        CHECK(ids.count("COMMIT-0002") == 1);
+    }
+
+    SECTION("Edge: a commit referencing a file that no longer exists is handled");
+    {
+        writeTmpFile("gone.txt", "here now\n");
+        AppController manager;
+        manager.initRepository("gone-repo", TMP_DIR);
+        manager.addFile("gone.txt");
+        manager.stageFile("gone.txt");
+        CHECK(manager.commitChanges("commit before deletion", "Bao"));
+        const string id = manager.getCommits()[0]->getCommitID();
+
+        // the working file disappears, but the commit still references it
+        error_code ignored;
+        filesystem::remove(diskPath("gone.txt"), ignored);
+
+        // the snapshot is in memory, so reading history still works
+        string diff;
+        CHECK(manager.diffFileAgainstCommit(id, "gone.txt", diff));
+        CHECK(manager.restoreFile(id, "gone.txt"));
+
+        // and the snapshot can be written back out, recreating the file
+        CHECK(manager.writeFileToDisk("gone.txt"));
+        CHECK(readTmpFile("gone.txt") == "here now\n");
+
+        // a file the commit never knew about is refused, not invented
+        CHECK(!manager.restoreFile(id, "never-existed.txt"));
+        CHECK(manager.lastMessage().find("not tracked") != string::npos);
     }
 
     SECTION("Edge: special characters in a search do not crash the application");
     {
         writeTmpFile("special.txt", "x\n");
-        RepositoryManager manager;
+        AppController manager;
         manager.initRepository("special-repo", TMP_DIR);
         manager.addFile("special.txt");
         manager.stageFile("special.txt");
@@ -1259,7 +1562,7 @@ int main() {
     testRepository();
     testDataManager();
     testAnalytics();
-    testRepositoryManager();
+    testAppController();
     testEndToEnd();
     testScaleAndEdgeCases();
 

@@ -13,13 +13,30 @@
 
 === GUI: creating a file adds a row to the files table ===
 [PASS] filesTable != nullptr && filesTable->rowCount() == 1
-[PASS] filesTable->item(0, 0)->text() == TMP_DIR + "/gui.txt"
+[PASS] filesTable->item(0, 0)->text() == "gui.txt"
 [PASS] filesTable->item(0, 1)->text() == "Modified"
 [PASS] find<QLineEdit>(window, "newFileNameEdit")->text().isEmpty()
 
 === GUI: 'Stage all modified' updates the status column ===
 [PASS] filesTable->item(0, 1)->text() == "Staged"
 [PASS] find<QLabel>(window, "statStagedLabel")->text() == "1"
+
+=== GUI: uncommitted-changes warning appears while work is staged (Feature 3) ===
+[PASS] warning != nullptr && warning->isVisibleTo(&window)
+[PASS] warning->text().contains("staged but not committed")
+
+=== GUI: unsaved work is marked in the title bar (Feature 5) ===
+[PASS] window.windowTitle().contains("*")
+[PASS] window.windowTitle().contains("gui-repo")
+
+=== GUI: invalid input is highlighted as it is typed (Feature 1) ===
+[PASS] !name->styleSheet().isEmpty()
+[PASS] name->toolTip().contains("too short")
+[PASS] name->toolTip().contains("letter")
+[PASS] name->styleSheet().isEmpty()
+[PASS] name->toolTip().isEmpty()
+[PASS] !author->styleSheet().isEmpty()
+[PASS] author->styleSheet().isEmpty()
 
 === GUI: committing fills the commits table and clears the message ===
 [PASS] commitsTable != nullptr && commitsTable->rowCount() == 1
@@ -42,8 +59,9 @@
 [PASS] filesTable->item(0, 1)->text() == "Modified"
 [PASS] commitBox != nullptr && commitBox->count() == 1
 [PASS] fileBox != nullptr && fileBox->count() == 1
-[PASS] diff.contains("+ second line")
-[PASS] diff.contains("1 line(s) added")
+[PASS] diff.contains("Old Content:")
+[PASS] diff.contains("New Content:")
+[PASS] diff.contains("second line")
 
 === GUI: search narrows the commits table and keeps every column ===
 [PASS] commitsTable->rowCount() == 2
@@ -52,12 +70,42 @@
 [PASS] !commitsTable->item(0, 1)->text().isEmpty()
 [PASS] commitsTable->rowCount() == 2
 
-=== GUI: save and load round-trip through the window ===
-[PASS] secondFiles != nullptr && secondFiles->rowCount() == 0
-[PASS] secondFiles->rowCount() == 1
-[PASS] secondCommits->rowCount() == 2
-[PASS] second.findChild<QLineEdit*>("repoNameEdit")->text() == "gui-repo"
-[PASS] second.findChild<QLabel*>("statCommitsLabel")->text() == "2"
+=== GUI: the uncommitted warning clears once everything is committed ===
+[PASS] warning != nullptr && !warning->isVisibleTo(&window)
+
+=== GUI: saving writes the file and clears the unsaved marker (Feature 4/5) ===
+[PASS] window.windowTitle().contains("*")
+[PASS] !window.windowTitle().contains("*")
+[PASS] filesystem::exists((TMP_DIR + "/gui.dat").toStdString())
+
+=== GUI: saving is refused when the data file name is blank (Feature 4) ===
+[PASS] !saveEdit->styleSheet().isEmpty()
+
+=== GUI: a new window reopens the previous session on startup ===
+[PASS] files != nullptr && files->rowCount() == 1
+[PASS] commits != nullptr && commits->rowCount() == 2
+[PASS] reopened.findChild<QLineEdit*>("repoNameEdit")->text() == "gui-repo"
+[PASS] reopened.findChild<QLabel*>("statCommitsLabel")->text() == "2"
+[PASS] !reopened.windowTitle().contains("*")
+
+=== GUI: loading explicitly also restores the repository ===
+[PASS] files != nullptr && files->rowCount() == 0
+[PASS] files->rowCount() == 1
+[PASS] manual.findChild<QTableWidget*>("commitsTable")->rowCount() == 2
+[PASS] manual.findChild<QLineEdit*>("repoNameEdit")->text() == "gui-repo"
+
+=== GUI: a corrupt saved session is survived on startup (exception safety) ===
+[PASS] broken.findChild<QTableWidget*>("filesTable")->rowCount() == 0
+[PASS] broken.findChild<QTableWidget*>("commitsTable")->rowCount() == 0
+[PASS] !broken.findChild<QPushButton*>("commitButton")->isEnabled()
+
+=== GUI: a missing saved session is ignored quietly ===
+[PASS] missing.findChild<QTableWidget*>("filesTable")->rowCount() == 0
+[PASS] !missing.findChild<QPushButton*>("stageAllButton")->isEnabled()
+
+=== GUI: refusals really do open a dialog, they are not swallowed ===
+[PASS] g_dialogsShown > 0
+       (1 dialog(s) shown and dismissed)
 
 ----------------------------------------
-Results: 37 passed, 0 failed
+Results: 64 passed, 0 failed

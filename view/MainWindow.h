@@ -2,10 +2,11 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QMessageBox>
 
 #include <functional>
 
-#include "RepositoryManager.h"
+#include "AppController.h"
 
 class QCloseEvent;
 class QComboBox;
@@ -23,8 +24,8 @@ class QTableWidget;
  * The graphical counterpart to ConsoleView, and it follows exactly the same
  * rule: this class owns every widget and every message box, and holds no
  * business logic whatsoever. Each slot is the same three steps the console
- * handlers use — read the widgets, call ONE RepositoryManager method, then show
- * the manager's own explanation in the status bar.
+ * handlers use — read the widgets, call ONE AppController method, then show
+ * the controller's own explanation in the status bar.
  *
  * Because both front ends talk to the identical controller, the model and
  * controller layers needed no changes at all to gain a GUI.
@@ -74,7 +75,7 @@ private slots:
 
 private:
     // the one and only path to the model
-    RepositoryManager manager;
+    AppController manager;
 
     QTabWidget* tabs = nullptr;
 
@@ -122,6 +123,22 @@ private:
     // between runs so the previous session can be restored on startup.
     QString lastDataFile;
 
+    /* ----- GUI edge-case guards -----
+     *
+     * dialogOpen  - true while a modal message box is on screen. Every dialog in
+     *               this class goes through the ask/info/warn/fail helpers below,
+     *               which refuse to open a second one on top of the first. Qt
+     *               blocks the user from clicking through a modal, but a signal
+     *               arriving while one is up (a queued click, a timer, a test
+     *               driving widgets directly) can still stack them.
+     *
+     * commitBusy  - true for the duration of onCommit(). Guards against the
+     *               Commit button being pressed repeatedly before the first
+     *               press has finished and the views have been redrawn.
+     */
+    bool dialogOpen = false;
+    bool commitBusy = false;
+
     // ----- construction helpers -----
     QWidget* buildRepositoryTab();
     QWidget* buildFilesTab();
@@ -159,6 +176,22 @@ private:
 
     // Restores the repository saved by the previous session, if there is one.
     void loadPreviousSession();
+
+    /* ----- the only way this class shows a dialog -----
+     *
+     * Each one refuses to open while another is already showing, which is what
+     * keeps modal dialogs from stacking. info/warn/fail simply do nothing in
+     * that case; ask() returns the caller's `whenBlocked` answer so a blocked
+     * confirmation is treated as "the user did not agree".
+     */
+    void info(const QString& title, const QString& text);
+    void warn(const QString& title, const QString& text);
+    void fail(const QString& title, const QString& text);
+    QMessageBox::StandardButton ask(const QString& title, const QString& text,
+                                    QMessageBox::StandardButtons buttons,
+                                    QMessageBox::StandardButton defaultButton,
+                                    QMessageBox::StandardButton whenBlocked,
+                                    QMessageBox::Icon icon = QMessageBox::Question);
 
     // Paints a line edit red (or clears it) and explains why through a tooltip.
     static void markField(QLineEdit* field, const std::string& problem);

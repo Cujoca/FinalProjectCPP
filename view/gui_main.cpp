@@ -7,7 +7,7 @@
 //
 //   view/MainWindow (Qt)   or   view/ConsoleView (terminal)
 //                    \          /
-//              controller/RepositoryManager
+//              controller/AppController -> controller/RepositoryManager
 //                          |
 //     model/Repository, DataManager, DiffEngine, AnalyticsEngine,
 //     TrackedFile, Commit, StandardCommit, Validator

@@ -17,9 +17,9 @@ void StandardCommit::displayCommit() const {
     cout << "Message: " << this->getMessage() << endl;
     cout << "Timestamp: " << this->getTimestamp() << endl;
     cout << "Commit ID: " << this->getCommitID() << endl;
-    cout << "Files in this snapshot (" << fileSnapshots.size() << "):" << endl;
+    cout << "Files being commited (path):" << endl;
     // go through tracked files and just print out path, we don't want to print the entire content
-    for (const auto &fst: fileSnapshots | views::keys) { cout << "  " << fst << endl; }
+    for (const auto &fst: fileSnapshots | views::keys) { cout << fst; }
 }
 
 string StandardCommit::getSummary() const {

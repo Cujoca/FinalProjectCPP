@@ -36,11 +36,11 @@ C:\Users\pc\vsc\FinalProjectCPP
 |---|--------|-----------------|-------|
 | 1.1 | In **Name**, type `ab` | Box turns **red**; hover shows "the name is too short" | |
 | 1.2 | Clear it and type `12345` | Still red; tooltip says "must contain at least one letter" | |
-| 1.3 | Type a 21+ character name | Red; tooltip says "too long" | |
+| 1.3 | Type a 51+ character name | Red; tooltip says "too long" | |
 | 1.4 | Type `demo-repo` | Red highlight **disappears** | |
 | 1.5 | In **Path**, type `bad<name>` | Path box turns red ("the path is not valid") | |
 | 1.6 | Click **Browse…**, pick your `vcsdemo` folder | Path fills in, red clears | |
-| 1.7 | Click **Create repository** | Status bar: `Repository 'demo-repo' initialized at …vcsdemo.` and the app jumps to the **Files** tab | |
+| 1.7 | Click **Initialize** | Status bar: `Repository 'demo-repo' initialized at …vcsdemo.` and the app jumps to the **Files** tab | |
 | 1.8 | Look at the title bar | Now shows `[demo-repo] *` — the `*` means unsaved work (Feature 5) | |
 | 1.9 | Go back to **Repository** tab | Summary line reads `demo-repo at …vcsdemo - 0 file(s), 0 commit(s), 0 staged.` | |
 
@@ -99,7 +99,7 @@ C:\Users\pc\vsc\FinalProjectCPP
 | 5.1 | Open `vcsdemo\notes.txt` in Notepad, add a second line `second line`, save | — | |
 | 5.2 | In the app: **Files** tab → select `notes.txt` → **Re-read from disk** | Status returns to `Modified` | |
 | 5.3 | Go to **Diff** tab. Commit = `#1 …`, File = `notes.txt` | — | |
-| 5.4 | Click **Compute diff** | Shows `    first line` then `  + second line` then `(1 line(s) added, 0 line(s) removed)` | |
+| 5.4 | Click **Compute diff** | Shows the committed version under `Old Content:` and the edited version under `New Content:`, so `second line` appears only in the new one | |
 | 5.5 | Select `docs/readme.txt` (unchanged) → **Compute diff** | `No differences found` | |
 
 ---
