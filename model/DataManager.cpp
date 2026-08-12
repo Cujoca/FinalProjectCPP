@@ -1,6 +1,7 @@
 #include "DataManager.h"
 #include "StandardCommit.h"
 #include "TrackedFile.h"
+#include "Validator.h"
 
 #include <charconv>
 #include <fstream>
@@ -232,6 +233,18 @@ bool DataManager::loadData(Repository &repo, const string fileName) {
   if (!readLine(inFile, repoName) || !readLine(inFile, repoPath)) {
     return false;
   }
+
+
+  // ensure that the loaded data is valid, since while it's technically
+  // not possible for the proram to save names and paths which are not valid,
+  // it's still a good idea to double check
+  Validator *valid;
+
+  auto nameTemp = valid->validateRepoName(repoName);
+  auto pathTemp = valid->validateRepoPath(repoPath);
+
+  if (nameTemp.has_value()) { repoName = nameTemp.value(); }
+  if (pathTemp.has_value()) { repoPath = pathTemp.value(); }
 
   // Everything is parsed into local containers first and only handed to the
   // repository once the whole file has been read successfully. A corrupt save
