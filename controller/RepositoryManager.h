@@ -42,6 +42,8 @@ private:
   // turns a Validator::Error into wording a user can act on
   static string describe(Error error, const string &subject);
 
+  bool ensureRepoPath (const string& path);
+
 public:
   bool initRepository(const string RepoName, const string RepoPath);
 

@@ -243,8 +243,10 @@ bool DataManager::loadData(Repository &repo, const string fileName) {
   auto nameTemp = valid->validateRepoName(repoName);
   auto pathTemp = valid->validateRepoPath(repoPath);
 
-  if (nameTemp.has_value()) { repoName = nameTemp.value(); }
-  if (pathTemp.has_value()) { repoPath = pathTemp.value(); }
+  if (!nameTemp || !pathTemp) { return false; }
+
+  repoName = nameTemp.value();
+  pathTemp = pathTemp.value();
 
   // Everything is parsed into local containers first and only handed to the
   // repository once the whole file has been read successfully. A corrupt save

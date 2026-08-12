@@ -1,5 +1,6 @@
 #include "RepositoryManager.h"
 
+#include <filesystem>
 #include <fstream>
 
 bool RepositoryManager::fail(const string message) {
@@ -33,12 +34,30 @@ string RepositoryManager::describe(Error error, const string &subject) {
   }
 }
 
+// ensures that a repo has a valid path in the filesystem.
+// Creates a new dir if is not found.
+bool RepositoryManager::ensureRepoPath (const string& path) {
+  namespace fs = std::filesystem;
+
+  error_code err;
+
+  if (fs::is_directory(path, err)) { return true; }
+
+  if (fs::exists(path, err)) { return fail("" + path + " is a file, not a folder"); }
+
+  if (!fs::create_directory(path)) { return fail("Could not create directory at: " + path); }
+
+  return true;
+
+}
+
 // Call
 bool RepositoryManager::initRepository(const string RepoName,
                                        const string RepoPath) {
 
   // the raw input is validated here so the model only ever stores clean values
   auto checkedName = validator.validateRepoName(RepoName);
+
 
   if (!checkedName) {
     return fail("Repository name rejected: " +
@@ -51,6 +70,10 @@ bool RepositoryManager::initRepository(const string RepoName,
     return fail("Repository path rejected: " +
                 describe(checkedPath.error(), "the path") + ".");
   }
+
+  // checking dir actually exists
+  if (!ensureRepoPath(*checkedPath)) { return false; }
+
 
   if (!repoClas.initRepository(*checkedName, *checkedPath)) {
     return fail("Repository could not be initialized.");
