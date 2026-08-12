@@ -254,17 +254,12 @@ bool Repository::commitChanges(const string &message, const string &author) {
     timeText.erase(timeText.size() - 1);
   }
 
-  // uses incrementcounter instead of sizes since using sizes can give
-  // copies of already used commitIDs, so I added a commit counter to
-  // Repository object.
-  const string &newCommitID = format("COMMIT-{:04}", this->incCommitCounter());
-  // "COMMIT-" + to_string(commits.size() + 1) "commit" word is already
-  // added in main ?
-  // ^^ no? It's never added in main (or the qt gui for that matter)
-
   // creating attributes to put into FileSnapshots in StandardCommit
   auto newCommit = make_unique<StandardCommit>(author, message, timeText,
                                                nextCommitID(commits));
+  // "COMMIT-" + to_string(commits.size() + 1) "commit" word is already
+  // added in main ?
+  // ^^ no? It's never added in main (or the qt gui for that matter)
 
   // put snapshot map into StandardCommit
   newCommit->setFileSnapshots(Tempsnapshots);
