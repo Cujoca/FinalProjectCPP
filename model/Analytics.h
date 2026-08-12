@@ -6,34 +6,31 @@
 
 
 
-#include <map>
 #include <string>
-
-#include "StandardCommit.h"
 using namespace std;
 
 //template
 template <typename T>
 class AnalyticsEngine {
 public:
-//need to reference pass otherwise wont usable with unique pointer -- no copy--
+//need to reference pass otherwise wont usable with unique pointer -- no copy-- 
     int computeTotalCommits(const T& commits) {
 
         // commits vector size
-        return static_cast<int>(commits.size());
+        return commits.size();
     }
 
-    int computeTrackedFilesCount(const T& files) {
+    int computeTrackedFilesCount(const T files) {
 
         // files vector size
-        return static_cast<int>(files.size());
+        return files.size();
     }
 
 
     //PASS GETCOMMIT!!!!
-    string computeMostModifiedFiles(const T& commits) {
+    string computeMostModifiedFiles(const T commits) {
 
-
+       
     // commits vector will come from Repository::getCommits()
         map<string, int> fileCounter;
 
@@ -45,14 +42,21 @@ public:
 
         // convert Commit pointer to StandardCommit pointer
         // because getFileSnapshots() is only in StandardCommit
-            const StandardCommit* pointerCommit = dynamic_cast<const StandardCommit*>(commit.get());
+            StandardCommit* pointerCommit = dynamic_cast<StandardCommit*>(commit.get());
 
+            
+        // get fileSnapshots
+
+        // loop snapshots and count each file path
+
+    // TODO:
+    // find highest count
 
             //check if pointer commit has null
             if (pointerCommit != nullptr) {
 
                 // get fileSnapshots
-                const map<string, string>& exSnapshots = pointerCommit->getFileSnapshots();
+                map<string, string> exSnapshots = pointerCommit->getFileSnapshots();
 
                 // loop snapshots and count each file path
                 for (auto& snapshot : exSnapshots) {
@@ -62,7 +66,7 @@ public:
         }
 
         if (fileCounter.empty()) {
-            return "no files have been committed yet";
+            return "Most modified files not calculated yet, file counter is empty";
         }
 
         string mostFile = "";
@@ -77,7 +81,7 @@ public:
             }
         }
 
-        return mostFile + " (appears in " + to_string(mostCount) + " commit(s))";
+        return mostFile + " changed " + to_string(mostCount) + " times";
     }
 };
 

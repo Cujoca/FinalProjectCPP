@@ -10,10 +10,10 @@
 //
 // Run headless with:  QT_QPA_PLATFORM=offscreen ./target/GuiTestRunner
 //
-// Only success paths are clicked on purpose: a failed operation opens a modal
-// QMessageBox, which would block a non-interactive run forever. The failure
-// messages themselves are already covered by the RepositoryManager tests in
-// test_main.cpp.
+// Failure paths open a modal QMessageBox, which would block a non-interactive
+// run forever, so a timer below closes any dialog that appears and counts it.
+// That lets the suite click refusals as well as successes; the wording of each
+// message is covered by the AppController tests in test_main.cpp.
 
 #include <QApplication>
 #include <QComboBox>
@@ -23,6 +23,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QTabWidget>
+#include <QTimer>
 #include <QTableWidget>
 
 #include <filesystem>
@@ -35,6 +36,9 @@ using namespace std;
 
 // ---- minimal test harness (same style as test_main.cpp) ----
 static int g_passed = 0, g_failed = 0;
+
+// counts modal dialogs the timer in main() had to dismiss
+static int g_dialogsShown = 0;
 
 #define CHECK(expr) \
     do { \
@@ -85,6 +89,19 @@ int main(int argc, char* argv[]) {
     // feature is driven through it, so the names must match the real app.
     QApplication::setApplicationName("MiniVCS");
     QApplication::setOrganizationName("CST8219 Group Project");
+
+    /* Modal dialogs run their own nested event loop, so a QTimer still fires
+     * while one is up. Closing it lets exec() return and the test carry on -
+     * without this a single refusal dialog stalls the whole run.
+     */
+    QTimer dialogCloser;
+    QObject::connect(&dialogCloser, &QTimer::timeout, [] {
+        if (QWidget* modal = QApplication::activeModalWidget()) {
+            g_dialogsShown++;
+            modal->close();
+        }
+    });
+    dialogCloser.start(20);
 
     cout << "========================================\n";
     cout << "  MiniVCS GUI Test Suite\n";
@@ -232,8 +249,14 @@ int main(int argc, char* argv[]) {
 
         click(window, "diffButton");
         const QString diff = find<QPlainTextEdit>(window, "diffView")->toPlainText();
-        CHECK(diff.contains("+ second line"));
-        CHECK(diff.contains("1 line(s) added"));
+
+        /* DiffEngine prints both versions in full under "Old Content:" /
+         * "New Content:" headings rather than marking individual lines, so the
+         * panel is checked for that shape and for the added text appearing.
+         */
+        CHECK(diff.contains("Old Content:"));
+        CHECK(diff.contains("New Content:"));
+        CHECK(diff.contains("second line"));
     }
 
     SECTION("GUI: search narrows the commits table and keeps every column");
@@ -349,6 +372,17 @@ int main(int argc, char* argv[]) {
         MainWindow missing;
         CHECK(missing.findChild<QTableWidget*>("filesTable")->rowCount() == 0);
         CHECK(!missing.findChild<QPushButton*>("stageAllButton")->isEnabled());
+    }
+
+    SECTION("GUI: refusals really do open a dialog, they are not swallowed");
+    {
+        /* The run above clicked at least one refusal (saving with a blank data
+         * file name), so the dismisser must have closed a dialog. If this ever
+         * reads zero, the dialog helpers have stopped showing anything and every
+         * "invalid input is reported" test above would be passing vacuously.
+         */
+        CHECK(g_dialogsShown > 0);
+        cout << "       (" << g_dialogsShown << " dialog(s) shown and dismissed)\n";
     }
 
     QSettings().clear();

@@ -29,9 +29,10 @@ expected<string, Error> Validator::validateRepoName (const std::string &name) {
 
     const string trimmed = trim(name);
 
+    // limits from the specification: 3-50 characters
     if (trimmed.empty()) return                unexpected(Error::Empty);
     if (trimmed.length() < 3) return           unexpected(Error::TooShort);
-    if (trimmed.length() > 20) return          unexpected(Error::TooLong);
+    if (trimmed.length() > 50) return          unexpected(Error::TooLong);
     if (regex_match(trimmed, oneAlpha)) return unexpected(Error::NoAlpha);
 
     return trimmed;
@@ -75,13 +76,18 @@ expected<string, Error> Validator::validateRepoPath (const std::string &path) {
 }
 
 /*
- * A commit ID has to be a non-empty run of letters/digits/dashes — the IDs this
- * project generates are short hex strings, but a loaded repository may carry
- * plain counter IDs like "3", so both shapes are allowed.
+ * The specification fixes the commit id format exactly:
+ *
+ *      COMMIT-0001
+ *      COMMIT-0002
+ *
+ * so the regex demands the literal word COMMIT, a dash, then at least four
+ * digits. Anything else - a bare counter like "3", a lowercase prefix, a
+ * trailing letter - is rejected.
  */
 expected<string, Error> Validator::validateCommitID (const std::string &id) {
 
-    const regex idPattern("[a-zA-Z0-9-]+");
+    const regex idPattern(R"(COMMIT-[0-9]{4,})");
 
     const string trimmed = trim(id);
 
@@ -93,21 +99,38 @@ expected<string, Error> Validator::validateCommitID (const std::string &id) {
 }
 
 /*
- * Commit messages just have to say something: non-empty once trimmed, and short
- * enough to stay readable in the log.
+ * Produces the next id in that format. Zero-padded to four digits, and allowed
+ * to grow past four for a repository with more than 9999 commits.
+ */
+std::string Validator::formatCommitID (int existingCommits) {
+
+    const int next = existingCommits + 1;
+    string digits = to_string(next);
+
+    while (digits.length() < 4) {
+        digits.insert(digits.begin(), '0');
+    }
+
+    return "COMMIT-" + digits;
+}
+
+/*
+ * Commit messages: 5-200 characters once trimmed. Trimming first is what makes
+ * a whitespace-only message fail rather than sneak through on its padding.
  */
 expected<string, Error> Validator::validateMessage  (const std::string &msg) {
 
     const string trimmed = trim(msg);
 
     if (trimmed.empty()) return unexpected(Error::Empty);
+    if (trimmed.length() < 5) return unexpected(Error::TooShort);
     if (trimmed.length() > 200) return unexpected(Error::TooLong);
 
     return trimmed;
 }
 
 /*
- * An author name must contain at least one letter, so a commit can't be
+ * Author names: 3-50 characters, and at least one letter so a commit cannot be
  * attributed to "1234" or a row of punctuation.
  */
 expected<string, Error> Validator::validateAuthor   (const std::string &author) {
@@ -118,9 +141,42 @@ expected<string, Error> Validator::validateAuthor   (const std::string &author) 
     const string trimmed = trim(author);
 
     if (trimmed.empty()) return unexpected(Error::Empty);
+    if (trimmed.length() < 3) return unexpected(Error::TooShort);
     if (trimmed.length() > 50) return unexpected(Error::TooLong);
     if (regex_match(trimmed, oneAlpha)) return unexpected(Error::NoAlpha);
 
     return trimmed;
 }
-//std::optional<Error> Validator::validateStatusTransition(std::string name) {return optional<Error>();}
+
+/*
+ * The file lifecycle runs Modified -> Staged -> Committed.
+ *
+ * Going back from Committed to Modified is normal - it just means the file was
+ * edited again after being committed. Jumping Modified -> Committed is not,
+ * because a file has to pass through the staging area first. Staying put is
+ * always fine, so re-staging an already-staged file is not an error here.
+ */
+std::optional<Error> Validator::validateStatusTransition (Status from, Status to) {
+
+    if (from == to) return nullopt;
+
+    // nothing legitimately moves into or out of the Error state
+    if (from == Status::Error || to == Status::Error) return Error::InvalidTransition;
+
+    switch (from) {
+        case Status::Modified:
+            // must be staged before it can be committed
+            return to == Status::Staged ? nullopt : optional<Error>(Error::InvalidTransition);
+
+        case Status::Staged:
+            // a staged file is committed, or edited again back to Modified
+            return nullopt;
+
+        case Status::Committed:
+            // editing a committed file again is allowed; committing it twice is not
+            return to == Status::Modified ? nullopt : optional<Error>(Error::InvalidTransition);
+
+        default:
+            return Error::InvalidTransition;
+    }
+}

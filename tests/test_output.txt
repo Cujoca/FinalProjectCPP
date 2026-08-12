@@ -101,7 +101,9 @@
 [PASS] !result.has_value()
 [PASS] result.error() == Error::TooShort
 
-=== Validator: validateRepoName - too long (> 20 chars) ===
+=== Validator: validateRepoName - too long (> 50 chars) ===
+[PASS] v.validateRepoName("this-name-is-way-too-long").has_value()
+[PASS] v.validateRepoName(string(50, 'a')).has_value()
 [PASS] !result.has_value()
 [PASS] result.error() == Error::TooLong
 
@@ -174,33 +176,66 @@
 [PASS] empty.error() == Error::Empty
 [PASS] !tooLong.has_value()
 [PASS] tooLong.error() == Error::TooLong
+[PASS] !tooShort.has_value()
+[PASS] tooShort.error() == Error::TooShort
 
-=== Validator: validateCommitID ===
-[PASS] v.validateCommitID("3").has_value()
-[PASS] v.validateCommitID("a1b2c3d").has_value()
+=== Validator: validateAuthor enforces 3-50 characters ===
+[PASS] v.validateAuthor("Bao").has_value()
+[PASS] !tooShort.has_value()
+[PASS] tooShort.error() == Error::TooShort
+[PASS] !tooLong.has_value()
+[PASS] tooLong.error() == Error::TooLong
+[PASS] !v.validateAuthor("12345").has_value()
+
+=== Validator: validateCommitID enforces the COMMIT-0001 format ===
+[PASS] v.validateCommitID("COMMIT-0001").has_value()
+[PASS] v.validateCommitID("COMMIT-9999").has_value()
+[PASS] v.validateCommitID("COMMIT-10000").has_value()
 [PASS] !v.validateCommitID("").has_value()
+[PASS] !v.validateCommitID("3").has_value()
+[PASS] !v.validateCommitID("a1b2c3d").has_value()
+[PASS] !v.validateCommitID("commit-0001").has_value()
+[PASS] !v.validateCommitID("COMMIT-001").has_value()
+[PASS] !v.validateCommitID("COMMIT-0001x").has_value()
 [PASS] !v.validateCommitID("has space").has_value()
+
+=== Validator: formatCommitID produces spec-format ids ===
+[PASS] Validator::formatCommitID(0) == "COMMIT-0001"
+[PASS] Validator::formatCommitID(1) == "COMMIT-0002"
+[PASS] Validator::formatCommitID(41) == "COMMIT-0042"
+[PASS] Validator::formatCommitID(9999) == "COMMIT-10000"
+[PASS] v.validateCommitID(Validator::formatCommitID(7)).has_value()
+
+=== Validator: validateStatusTransition guards the file lifecycle ===
+[PASS] !v.validateStatusTransition(Status::Modified, Status::Staged).has_value()
+[PASS] v.validateStatusTransition(Status::Modified, Status::Committed).has_value()
+[PASS] !v.validateStatusTransition(Status::Staged, Status::Committed).has_value()
+[PASS] !v.validateStatusTransition(Status::Staged, Status::Modified).has_value()
+[PASS] !v.validateStatusTransition(Status::Committed, Status::Modified).has_value()
+[PASS] v.validateStatusTransition(Status::Committed, Status::Staged).has_value()
+[PASS] !v.validateStatusTransition(Status::Staged, Status::Staged).has_value()
+[PASS] v.validateStatusTransition(Status::Error, Status::Staged).has_value()
+[PASS] v.validateStatusTransition(Status::Modified, Status::Error).has_value()
 
 === DiffEngine: identical content reports no differences ===
 [PASS] diff.computeDiff("same\n", "same\n") == "No differences found"
 [PASS] diff.computeDiff("", "") == "No differences found"
 
-=== DiffEngine: an added line is marked with + ===
-[PASS] out.find("+ two") != string::npos
-[PASS] out.find("1 line(s) added") != string::npos
-[PASS] out.find("0 line(s) removed") != string::npos
+=== DiffEngine: differing content shows both versions ===
+[PASS] out.find("Old Content:") != string::npos
+[PASS] out.find("New Content:") != string::npos
+[PASS] out.find("two") != string::npos
 
-=== DiffEngine: a removed line is marked with - ===
-[PASS] out.find("- two") != string::npos
-[PASS] out.find("1 line(s) removed") != string::npos
+=== DiffEngine: a removed line still appears in the old version ===
+[PASS] out.find("Old Content:\none\ntwo\n") != string::npos
+[PASS] out.find("New Content:\none\n") != string::npos
 
-=== DiffEngine: unchanged lines are kept as context ===
-[PASS] out.find("    keep") != string::npos
-[PASS] out.find("- old") != string::npos
-[PASS] out.find("+ new") != string::npos
+=== DiffEngine: the whole of both versions is reproduced ===
+[PASS] out.find("keep\nold") != string::npos
+[PASS] out.find("keep\nnew") != string::npos
 
-=== DiffEngine: CRLF and LF versions of the same text match ===
-[PASS] diff.computeDiff("a\r\nb\r\n", "a\nb\n").find("0 line(s) added") != string::npos
+=== DiffEngine: comparison is exact, so CRLF differs from LF ===
+[PASS] diff.computeDiff("a\r\nb\r\n", "a\nb\n") != "No differences found"
 
 === Repository: starts uninitialized and refuses work ===
 [PASS] !repo.isInitialized()
@@ -217,24 +252,25 @@
 [PASS] repo.getRepPath() == "path"
 
 === Repository: addFile reads content off disk ===
-[PASS] repo.addFile(tmpPath("alpha.txt"))
+[PASS] repo.addFile(diskPath("alpha.txt"))
 [PASS] repo.getFiles().size() == 1
 [PASS] repo.getFiles()[0].getContent() == "hello\nworld\n"
 [PASS] repo.getFiles()[0].getStatus() == Status::Modified
 
 === Repository: addFile refuses duplicates and missing files ===
-[PASS] repo.addFile(tmpPath("beta.txt"))
-[PASS] !repo.addFile(tmpPath("beta.txt"))
-[PASS] !repo.addFile(tmpPath("does-not-exist.txt"))
+[PASS] repo.addFile(diskPath("beta.txt"))
+[PASS] !repo.addFile(diskPath("beta.txt"))
+[PASS] !repo.addFile(diskPath("does-not-exist.txt"))
 [PASS] repo.getFiles().size() == 1
 
 === Repository: stageFile moves a file into the staging area ===
-[PASS] repo.countStaged() == 0
-[PASS] repo.stageFile(tmpPath("gamma.txt"))
-[PASS] repo.countStaged() == 1
+[PASS] countStagedIn(repo) == 0
+[PASS] repo.stageFile(diskPath("gamma.txt"))
+[PASS] countStagedIn(repo) == 1
 [PASS] !repo.stageFile("not-tracked.txt")
 
 === Repository: commit requires something staged ===
+Snapshot is empty
 [PASS] !repo.commitChanges("nothing staged", "Bao")
 [PASS] repo.getCommits().empty()
 
@@ -242,44 +278,29 @@
 [PASS] repo.commitChanges("first commit", "Bao")
 [PASS] repo.getCommits().size() == 1
 [PASS] repo.getFiles()[0].getStatus() == Status::Committed
-[PASS] repo.countStaged() == 0
+[PASS] countStagedIn(repo) == 0
 [PASS] commit != nullptr
 [PASS] commit->getFileSnapshots().size() == 1
-[PASS] commit->getFileSnapshots().at(tmpPath("eps.txt")) == "content\n"
+[PASS] commit->getFileSnapshots().at(diskPath("eps.txt")) == "content\n"
 
-=== Repository: each commit is a FULL snapshot, not just the new files ===
+=== Repository: a commit records only the files staged for it ===
 [PASS] second != nullptr
-[PASS] second->getFileSnapshots().size() == 2
-[PASS] second->getFileSnapshots().count(tmpPath("one.txt")) == 1
-[PASS] second->getFileSnapshots().count(tmpPath("two.txt")) == 1
+[PASS] second->getFileSnapshots().size() == 1
+[PASS] second->getFileSnapshots().count(diskPath("two.txt")) == 1
 
 === Repository: getCommitHistory returns one summary per commit ===
 [PASS] history.size() == 1
 [PASS] history[0].find("only commit") != string::npos
 
 === Repository: restoreFile brings back an older snapshot ===
-[PASS] repo.refreshFile(tmpPath("restore.txt"))
 [PASS] repo.getFiles()[0].getContent() == "version two\n"
-[PASS] repo.getFiles()[0].getStatus() == Status::Modified
-[PASS] repo.restoreFile(id, tmpPath("restore.txt"))
+[PASS] repo.restoreFile(id, diskPath("restore.txt"))
 [PASS] repo.getFiles()[0].getContent() == "version one\n"
 [PASS] repo.getFiles()[0].getStatus() == Status::Modified
 
 === Repository: restoreFile rejects unknown commits and untracked files ===
-[PASS] !repo.restoreFile("no-such-commit", tmpPath("r2.txt"))
-[PASS] !repo.restoreFile(id, tmpPath("never-committed.txt"))
-
-=== Repository: findFile / findCommit / isTracked ===
-[PASS] repo.isTracked(tmpPath("find.txt"))
-[PASS] !repo.isTracked("nope.txt")
-[PASS] repo.findFile(tmpPath("find.txt")) != nullptr
-[PASS] repo.findFile("nope.txt") == nullptr
-[PASS] repo.findCommit(repo.getCommits()[0]->getCommitID()) != nullptr
-[PASS] repo.findCommit("nope") == nullptr
-
-=== Repository: writeFile puts content on disk ===
-[PASS] repo.writeFile(tmpPath("written.txt"), "written by the repo\n")
-[PASS] readTmpFile("written.txt") == "written by the repo\n"
+[PASS] !repo.restoreFile("no-such-commit", diskPath("r2.txt"))
+[PASS] !repo.restoreFile(id, diskPath("never-committed.txt"))
 
 === DataManager: save then load round-trips files and commits ===
 [PASS] data.saveData(original, saveFile)
@@ -296,20 +317,12 @@
 [PASS] loaded.getCommits()[0]->getAuthor() == "Bao"
 [PASS] loaded.getCommits()[0]->getSummary() == original.getCommits()[0]->getSummary()
 [PASS] commit != nullptr
-[PASS] commit->getFileSnapshots().at(tmpPath("save1.txt")) == "first line\nsecond line\n"
+[PASS] commit->getFileSnapshots().at(diskPath("save1.txt")) == "first line\nsecond line\n"
 
 === DataManager: loading a missing file fails cleanly ===
-[PASS] !data.loadData(repo, tmpPath("no-such-save.dat"))
+Load file could not be opened
+[PASS] !data.loadData(repo, diskPath("no-such-save.dat"))
 [PASS] !repo.isInitialized()
-
-=== DataManager: a corrupt save file is rejected without wiping the repo ===
-[PASS] !data.loadData(repo, tmpPath("corrupt.dat"))
-[PASS] repo.getRepositoryName() == "test-repo"
-[PASS] repo.getFiles().size() == 1
-[PASS] repo.getCommits().size() == 1
-
-=== DataManager: a non-numeric count is rejected instead of throwing ===
-[PASS] !data.loadData(repo, tmpPath("garbage.dat"))
 
 === AnalyticsEngine: counts commits and tracked files ===
 [PASS] commitStats.computeTotalCommits(repo.getCommits()) == 1
@@ -317,13 +330,13 @@
 
 === AnalyticsEngine: reports the most committed file ===
 [PASS] most.find("often.txt") != string::npos
-[PASS] most.find("2 commit(s)") != string::npos
+[PASS] most.find("changed 2 times") != string::npos
 
 === AnalyticsEngine: empty repository reports no committed files ===
 [PASS] commitStats.computeTotalCommits(repo.getCommits()) == 0
-[PASS] commitStats.computeMostModifiedFiles(repo.getCommits()).find("no files") != string::npos
+[PASS] commitStats.computeMostModifiedFiles(repo.getCommits()) .find("file counter is empty") != string::npos
 
-=== RepositoryManager: validates the repository name and path ===
+=== AppController: validates the repository name and path ===
 [PASS] !manager.initRepository("ab", TMP_DIR)
 [PASS] manager.lastMessage().find("too short") != string::npos
 [PASS] !manager.initRepository("good-name", "bad<path>")
@@ -332,21 +345,21 @@
 [PASS] manager.isInitialized()
 [PASS] manager.getRepositoryName() == "good-name"
 
-=== RepositoryManager: refuses every operation before init ===
+=== AppController: refuses every operation before init ===
 [PASS] !manager.addFile("x.txt")
 [PASS] manager.lastMessage().find("Initialize a repository first") != string::npos
 [PASS] !manager.stageFile("x.txt")
 [PASS] !manager.commitChanges("m", "a")
 [PASS] !manager.saveRepository("x.dat")
 
-=== RepositoryManager: explains WHY adding a file failed ===
+=== AppController: explains WHY adding a file failed ===
 [PASS] !manager.addFile(tmpPath("missing.txt"))
 [PASS] manager.lastMessage().find("Cannot open") != string::npos
 [PASS] manager.addFile(tmpPath("mgr1.txt"))
 [PASS] !manager.addFile(tmpPath("mgr1.txt"))
 [PASS] manager.lastMessage().find("already tracked") != string::npos
 
-=== RepositoryManager: staging reports precise outcomes ===
+=== AppController: staging reports precise outcomes ===
 [PASS] !manager.stageFile("untracked.txt")
 [PASS] manager.lastMessage().find("not tracked") != string::npos
 [PASS] manager.stageFile(tmpPath("mgr2.txt"))
@@ -354,13 +367,13 @@
 [PASS] manager.lastMessage().find("already staged") != string::npos
 [PASS] manager.getStagedCount() == 1
 
-=== RepositoryManager: stageAllFiles stages every modified file ===
+=== AppController: stageAllFiles stages every modified file ===
 [PASS] manager.stageAllFiles()
 [PASS] manager.getStagedCount() == 2
 [PASS] !manager.stageAllFiles()
 [PASS] manager.lastMessage().find("No modified files") != string::npos
 
-=== RepositoryManager: commit validates author and message ===
+=== AppController: commit validates author and message ===
 [PASS] !manager.commitChanges("a message", "12345")
 [PASS] manager.lastMessage().find("Author rejected") != string::npos
 [PASS] !manager.commitChanges("   ", "Bao")
@@ -368,23 +381,23 @@
 [PASS] manager.commitChanges("a real message", "Bao")
 [PASS] manager.getTotalCommits() == 1
 
-=== RepositoryManager: commit with nothing staged is refused ===
+=== AppController: commit with nothing staged is refused ===
 [PASS] !manager.commitChanges("msg", "Bao")
 [PASS] manager.lastMessage().find("Nothing staged") != string::npos
 
-=== RepositoryManager: searchCommits matches anywhere in the summary ===
+=== AppController: searchCommits matches anywhere in the summary ===
 [PASS] manager.searchCommits("parser").size() == 1
 [PASS] manager.searchCommits("Andrei").size() == 1
 [PASS] manager.searchCommits("").size() == 2
 [PASS] manager.searchCommits("nothing").empty()
 
-=== RepositoryManager: getFileStatus tracks the workflow ===
+=== AppController: getFileStatus tracks the workflow ===
 [PASS] manager.getFileStatus(tmpPath("st.txt")) == "File not found"
 [PASS] manager.getFileStatus(tmpPath("st.txt")) == "Modified"
 [PASS] manager.getFileStatus(tmpPath("st.txt")) == "Staged"
 [PASS] manager.getFileStatus(tmpPath("st.txt")) == "Committed"
 
-=== RepositoryManager: createAndTrackFile writes a new file but never clobbers ===
+=== AppController: createAndTrackFile writes a new file but never clobbers ===
 [PASS] manager.createAndTrackFile(tmpPath("brand-new.txt"), "fresh\n")
 [PASS] readTmpFile("brand-new.txt") == "fresh\n"
 [PASS] manager.getFileStatus(tmpPath("brand-new.txt")) == "Modified"
@@ -392,11 +405,74 @@
 [PASS] manager.lastMessage().find("already exists") != string::npos
 [PASS] readTmpFile("brand-new.txt") == "fresh\n"
 
-=== RepositoryManager: diffFileAgainstCommit compares snapshot to working copy ===
+=== AppController: diffFileAgainstCommit compares snapshot to working copy ===
 [PASS] manager.diffFileAgainstCommit(id, tmpPath("diff.txt"), diff)
-[PASS] diff.find("+ line two") != string::npos
+[PASS] diff.find("line two") != string::npos
+[PASS] diff.find("New Content") != string::npos
 [PASS] !manager.diffFileAgainstCommit("no-such-id", tmpPath("diff.txt"), diff)
 [PASS] manager.lastMessage().find("No commit with id") != string::npos
+
+=== AppController: paths are relative to the repository root, like git ===
+[PASS] manager.addFile("rooted.txt")
+[PASS] manager.getFiles()[0].getPath() == "rooted.txt"
+[PASS] manager.getFiles()[0].getContent() == "in the repo\n"
+[PASS] manager.resolvePath("rooted.txt") == TMP_DIR + "/rooted.txt"
+
+=== AppController: an absolute path inside the repository is stored relative ===
+[PASS] manager.addFile(absolutePath)
+[PASS] manager.getFiles()[0].getPath() == "abs.txt"
+[PASS] manager.isTracked("abs.txt")
+[PASS] manager.isTracked(absolutePath)
+
+=== AppController: an absolute path outside the repository is kept as-is ===
+[PASS] manager.addFile(outside)
+[PASS] manager.getFiles()[0].getPath() == outside
+[PASS] manager.resolvePath(outside) == outside
+
+=== AppController: findFile / findCommit / isTracked ===
+[PASS] manager.isTracked(tmpPath("find.txt"))
+[PASS] !manager.isTracked("nope.txt")
+[PASS] manager.findFile(tmpPath("find.txt")) != nullptr
+[PASS] manager.findFile("nope.txt") == nullptr
+[PASS] manager.findCommit(manager.getCommits()[0]->getCommitID()) != nullptr
+[PASS] manager.findCommit("nope") == nullptr
+
+=== AppController: createAndTrackFile writes into missing folders ===
+[PASS] manager.createAndTrackFile("nested/deep/file.txt", "made the folders\n")
+[PASS] readTmpFile("nested/deep/file.txt") == "made the folders\n"
+[PASS] manager.isTracked("nested/deep/file.txt")
+
+=== AppController: writeFileToDisk pushes the tracked copy back out ===
+[PASS] !manager.writeFileToDisk("not-tracked.txt")
+[PASS] manager.writeFileToDisk(tmpPath("push.txt"))
+[PASS] readTmpFile("push.txt") == "on disk\n"
+
+=== AppController: refreshFile picks up an edit made outside the app ===
+[PASS] manager.getFileStatus(tmpPath("refresh.txt")) == "Committed"
+[PASS] manager.refreshFile(tmpPath("refresh.txt"))
+[PASS] manager.getFiles()[0].getContent() == "after\n"
+[PASS] manager.getFileStatus(tmpPath("refresh.txt")) == "Modified"
+[PASS] !manager.refreshFile(tmpPath("refresh.txt"))
+[PASS] manager.lastMessage().find("Cannot re-read") != string::npos
+
+=== AppController: each commit is a FULL snapshot, not just the new files ===
+[PASS] second != nullptr
+[PASS] second->getFileSnapshots().size() == 2
+[PASS] second->getFileSnapshots().count("one.txt") == 1
+[PASS] second->getFileSnapshots().count("two.txt") == 1
+[PASS] manager.restoreFile(secondId, tmpPath("one.txt"))
+
+=== AppController: a corrupt save file is rejected without wiping the repo ===
+[PASS] !manager.loadRepository(diskPath("corrupt.dat"))
+[PASS] manager.lastMessage().find("not a valid save file") != string::npos
+[PASS] manager.getRepositoryName() == "keep-repo"
+[PASS] manager.getFiles().size() == 1
+[PASS] manager.getCommits().size() == 1
+
+=== AppController: a non-numeric count is rejected instead of throwing ===
+[PASS] !manager.loadRepository(diskPath("garbage.dat"))
+[PASS] !manager.loadRepository(diskPath("no-such-save.dat"))
+[PASS] !manager.isInitialized()
 
 === Integration: track -> stage -> commit -> edit -> restore -> save -> load ===
 [PASS] manager.initRepository("e2e-repo", TMP_DIR)
@@ -409,8 +485,8 @@
 [PASS] manager.commitChanges("edited version", "Bao")
 [PASS] manager.getTotalCommits() == 2
 [PASS] manager.diffFileAgainstCommit(firstCommit, tmpPath("e2e.txt"), diff)
-[PASS] diff.find("- original content") != string::npos
-[PASS] diff.find("+ edited content") != string::npos
+[PASS] diff.find("original content") != string::npos
+[PASS] diff.find("edited content") != string::npos
 [PASS] manager.restoreFile(firstCommit, tmpPath("e2e.txt"))
 [PASS] manager.writeFileToDisk(tmpPath("e2e.txt"))
 [PASS] readTmpFile("e2e.txt") == "original content\n"
@@ -430,5 +506,100 @@
 [PASS] output.find("visible commit") != string::npos
 [PASS] output.find("Bao") != string::npos
 
+=== Scale: hundreds of tracked files survive a save/load round-trip ===
+[PASS] repo.getFiles().size() == FILE_COUNT
+[PASS] countStagedIn(repo) == FILE_COUNT
+[PASS] repo.commitChanges("bulk commit", "Bao")
+[PASS] commit != nullptr && commit->getFileSnapshots().size() == FILE_COUNT
+[PASS] data.saveData(repo, saveFile)
+[PASS] data.loadData(reloaded, saveFile)
+[PASS] reloaded.getFiles().size() == FILE_COUNT
+[PASS] reloaded.getFiles()[0].getContent() == repo.getFiles()[0].getContent()
+[PASS] fileStats.computeTrackedFilesCount(reloaded.getFiles()) == FILE_COUNT
+
+=== Scale: thousands of commits ===
+[PASS] repo.getCommits().size() == COMMIT_COUNT
+[PASS] repo.getCommitHistory().size() == COMMIT_COUNT
+[PASS] commitStats.computeTotalCommits(repo.getCommits()) == COMMIT_COUNT
+[PASS] ids.size() == COMMIT_COUNT
+[PASS] found
+
+=== Scale: a large file is committed, saved and reloaded intact ===
+[PASS] repo.addFile(diskPath("large.txt"))
+[PASS] repo.getFiles()[0].getContent().size() == large.size()
+[PASS] repo.commitChanges("large file", "Bao")
+[PASS] data.saveData(repo, saveFile)
+[PASS] data.loadData(reloaded, saveFile)
+[PASS] reloaded.getFiles()[0].getContent() == large
+
+=== Scale: diffing very large inputs completes without exhausting memory ===
+[PASS] out.find("Old Content:") != string::npos
+[PASS] !out.empty()
+
+=== Edge: an empty repository saves and loads cleanly ===
+[PASS] data.saveData(repo, saveFile)
+[PASS] data.loadData(reloaded, saveFile)
+[PASS] reloaded.isInitialized()
+[PASS] reloaded.getFiles().empty()
+[PASS] reloaded.getCommits().empty()
+[PASS] commitStats.computeTotalCommits(reloaded.getCommits()) == 0
+[PASS] commitStats.computeMostModifiedFiles(reloaded.getCommits()) .find("file counter is empty") != string::npos
+
+=== Edge: an empty file is tracked and committed ===
+[PASS] repo.addFile(diskPath("blank.txt"))
+[PASS] repo.getFiles()[0].getSize() == 0
+[PASS] repo.commitChanges("empty file", "Bao")
+[PASS] data.saveData(repo, saveFile)
+[PASS] data.loadData(reloaded, saveFile)
+[PASS] reloaded.getFiles()[0].getContent().empty()
+
+=== Edge: a file deleted after staging is reported, not crashed on ===
+[PASS] manager.commitChanges("committed a deleted file", "Bao")
+[PASS] !manager.refreshFile("vanishing.txt")
+[PASS] manager.lastMessage().find("Cannot re-read") != string::npos
+
+=== Edge: a read-only file is tracked and committed without error ===
+[PASS] manager.addFile("readonly.txt")
+[PASS] manager.getFiles()[0].getContent() == "cannot be written\n"
+[PASS] manager.stageFile("readonly.txt")
+[PASS] manager.commitChanges("commit a read-only file", "Bao")
+[PASS] wrote || manager.lastMessage().find("Could not write") != string::npos
+
+=== Edge: invalid character encoding is carried through, not crashed on ===
+[PASS] manager.addFile("binary.txt")
+[PASS] manager.stageFile("binary.txt")
+[PASS] manager.commitChanges("commit odd bytes", "Bao")
+[PASS] manager.saveRepository(saveFile)
+[PASS] reloaded.loadRepository(saveFile)
+[PASS] reloaded.getTrackedFileCount() == 1
+
+=== Edge: duplicate commit ids loaded from a file are detected ===
+[PASS] manager.commitChanges("first commit", "Bao")
+[PASS] manager.refreshFile("dup.txt")
+[PASS] manager.stageFile("dup.txt")
+[PASS] manager.commitChanges("second commit", "Bao")
+[PASS] manager.saveRepository(saveFile)
+[PASS] reloaded.loadRepository(saveFile)
+[PASS] Validator().validateCommitID(commit->getCommitID()).has_value()
+[PASS] Validator().validateCommitID(commit->getCommitID()).has_value()
+[PASS] ids.size() == reloaded.getCommits().size()
+[PASS] ids.count("COMMIT-0001") == 1
+[PASS] ids.count("COMMIT-0002") == 1
+
+=== Edge: a commit referencing a file that no longer exists is handled ===
+[PASS] manager.commitChanges("commit before deletion", "Bao")
+[PASS] manager.diffFileAgainstCommit(id, "gone.txt", diff)
+[PASS] manager.restoreFile(id, "gone.txt")
+[PASS] manager.writeFileToDisk("gone.txt")
+[PASS] readTmpFile("gone.txt") == "here now\n"
+[PASS] !manager.restoreFile(id, "never-existed.txt")
+[PASS] manager.lastMessage().find("not tracked") != string::npos
+
+=== Edge: special characters in a search do not crash the application ===
+[PASS] manager.searchCommits("(normal)").size() == 1
+[PASS] manager.searchCommits("[](){}*?\\").empty()
+[PASS] manager.searchCommits("\"quotes\"").empty()
+[PASS] manager.searchCommits(string(500, 'x')).empty()
+
 ----------------------------------------
-Results: 274 passed, 0 failed
+Results: 401 passed, 0 failed

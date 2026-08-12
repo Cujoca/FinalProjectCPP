@@ -22,8 +22,11 @@ set(MODEL_SOURCES
 )
 
 # The controller is the only thing either front end talks to.
+# AppController (Bao) is what the front ends call; it delegates every repository
+# operation to RepositoryManager (Omer), so both are always built together.
 set(CONTROLLER_SOURCES
     controller/RepositoryManager.cpp
+    controller/AppController.cpp
 )
 
 # The console presentation layer (also holds the pure formatting helpers that
