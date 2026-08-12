@@ -96,7 +96,7 @@ QWidget* MainWindow::buildRepositoryTab() {
     auto* createForm   = new QFormLayout(createBox);
     repoNameEdit       = new QLineEdit(createBox);
     repoPathEdit       = new QLineEdit(".", createBox);
-    repoNameEdit->setPlaceholderText("3-20 characters, at least one letter");
+    repoNameEdit->setPlaceholderText("3-50 characters, at least one letter");
 
     auto* browsePathButton = new QPushButton("Browse...", createBox);
     auto* pathRow          = new QHBoxLayout;

@@ -146,7 +146,7 @@ unique_ptr<Commit> readCommit(ifstream &in) {
     if (!readLine(in, path) || !readTextBlock(in, content)) {
       return nullptr;
     }
-    snapshots.emplace(path, move(content));
+    snapshots.emplace(path, std::move(content));
   }
 
   auto commit = make_unique<StandardCommit>(author, message, timestamp, id);
@@ -256,7 +256,7 @@ bool DataManager::loadData(Repository &repo, const string fileName) {
       return false;
     }
 
-    loadedFiles.push_back(move(*file));
+    loadedFiles.push_back(std::move(*file));
   }
 
   // read commits
@@ -276,7 +276,7 @@ bool DataManager::loadData(Repository &repo, const string fileName) {
       return false;
     }
 
-    loadedCommits.push_back(move(commit));
+    loadedCommits.push_back(std::move(commit));
   }
 
   inFile.close();
@@ -286,8 +286,8 @@ bool DataManager::loadData(Repository &repo, const string fileName) {
     return false;
   }
 
-  repo.getFiles() = move(loadedFiles);
-  repo.getCommits() = move(loadedCommits);
+  repo.getFiles() = std::move(loadedFiles);
+  repo.getCommits() = std::move(loadedCommits);
 
   return true;
 }

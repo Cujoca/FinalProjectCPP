@@ -82,7 +82,7 @@ private:
     // model's Validator, so this only has to relay the answer.
     bool setupRepo() {
         for (int attempt = 0; attempt < 3; ++attempt) {
-            const string name = view.promptLine("Name your repository (3-20 chars): ");
+            const string name = view.promptLine("Name your repository (3-50 chars): ");
             if (!cin) return false;
             const string path = view.promptLine("Repository path (e.g. . or C:\\work\\repo): ");
             if (!cin) return false;

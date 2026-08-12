@@ -4,6 +4,10 @@ project(FinalProjectCPP CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Emit compile_commands.json so editors/language servers (clangd, etc.) see the
+# real compile flags (notably -std=c++23) and resolve C++23 features correctly.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/target)
 
 # ---- Shared sources -------------------------------------------------------

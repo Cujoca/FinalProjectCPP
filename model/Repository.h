@@ -20,7 +20,6 @@ protected:
   vector<TrackedFile> files;
   vector<unique_ptr<Commit>> commits;
   bool Sucinitialized;
-  int numCommits = 0;
 
 public:
   Repository();
@@ -66,8 +65,6 @@ public:
 
   // Number of files currently sitting in the staging area.
   int countStaged() const;
-
-  int incCommitCounter() { return ++(this->numCommits); }
 
   // GET - SET
   vector<string> getCommitHistory() const;
