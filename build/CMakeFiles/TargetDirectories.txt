@@ -1,5 +1,12 @@
-/Users/andrei/School/CPP/FinalProject/build/CMakeFiles/FinalProjectCPP.dir
-/Users/andrei/School/CPP/FinalProject/build/CMakeFiles/TestRunner.dir
-/Users/andrei/School/CPP/FinalProject/build/CMakeFiles/RunTests.dir
-/Users/andrei/School/CPP/FinalProject/build/CMakeFiles/edit_cache.dir
-/Users/andrei/School/CPP/FinalProject/build/CMakeFiles/rebuild_cache.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/FinalProjectCPP.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/TestRunner.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/RunTests.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/MiniVCSGui.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/GuiTestRunner.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/RunGuiTests.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/edit_cache.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/rebuild_cache.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/MiniVCSGui_autogen_timestamp_deps.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/MiniVCSGui_autogen.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/GuiTestRunner_autogen_timestamp_deps.dir
+/home/andrei/Projects/School/PlusPlus/Final/build/CMakeFiles/GuiTestRunner_autogen.dir

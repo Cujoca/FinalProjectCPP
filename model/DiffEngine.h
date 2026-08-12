@@ -9,12 +9,11 @@ using namespace std;
 
 class DiffEngine {
 public:
-    string computeDiff(const string oldContent, const string newContent);
-    //computeDiff(oldFilePath, newFilePath)
+  string computeDiff(const string oldContent, const string newContent);
+  // computeDiff(oldFilePath, newFilePath)
 
-
-    //basically will show the result of computeDiff
-    void displayDiff(const string diffText);
+  // basically will show the result of computeDiff
+  void displayDiff(const string diffText);
 };
 
 #endif

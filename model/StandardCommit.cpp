@@ -4,27 +4,27 @@
 #include <ranges>
 #include <utility>
 
-StandardCommit::StandardCommit(string author, string message, string timestamp, string commitID)
-    : Commit( std::move(author),
-             std::move(message),
-           std::move(timestamp),
-            std::move(commitID)) {}
+StandardCommit::StandardCommit(string author, string message, string timestamp,
+                               string commitID)
+    : Commit(std::move(author), std::move(message), std::move(timestamp),
+             std::move(commitID)) {}
 
 StandardCommit::~StandardCommit() = default;
 
 void StandardCommit::displayCommit() const {
-    cout << "Author: " << this->getAuthor() << endl;
-    cout << "Message: " << this->getMessage() << endl;
-    cout << "Timestamp: " << this->getTimestamp() << endl;
-    cout << "Commit ID: " << this->getCommitID() << endl;
-    cout << "Files in this snapshot (" << fileSnapshots.size() << "):" << endl;
-    // go through tracked files and just print out path, we don't want to print the entire content
-    for (const auto &fst: fileSnapshots | views::keys) { cout << "  " << fst << endl; }
+  cout << "Author: " << this->getAuthor() << endl;
+  cout << "Message: " << this->getMessage() << endl;
+  cout << "Timestamp: " << this->getTimestamp() << endl;
+  cout << "Commit ID: " << this->getCommitID() << endl;
+  cout << "Files in this snapshot (" << fileSnapshots.size() << "):" << endl;
+  // go through tracked files and just print out path, we don't want to print
+  // the entire content
+  for (const auto &fst : fileSnapshots | views::keys) {
+    cout << "  " << fst << endl;
+  }
 }
 
 string StandardCommit::getSummary() const {
-    return "COMMIT-"+commitID+"-" +
-            to_string(fileSnapshots.size())+" files-" +
-            message+"-" +
-            author;
+  return "COMMIT-" + commitID + "-" + to_string(fileSnapshots.size()) +
+         " files-" + message + "-" + author;
 }

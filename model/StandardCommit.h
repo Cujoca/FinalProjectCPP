@@ -3,7 +3,6 @@
 #include "Commit.h"
 #include <map>
 
-
 /* Concrete Commit implementation used for ordinary commits.
  *
  * Extends the abstract Commit with a snapshot of every tracked file's
@@ -13,24 +12,23 @@
  */
 class StandardCommit : public Commit {
 
-    // maps path -> content
-    map<string, string> fileSnapshots;
+  // maps path -> content
+  map<string, string> fileSnapshots;
 
-    public:
-        StandardCommit(
-            string author,
-            string message,
-            string timestamp,
-            string commitID
-        );
+public:
+  StandardCommit(string author, string message, string timestamp,
+                 string commitID);
 
-        ~StandardCommit() override;
-        void displayCommit() const override;
-        // TODO: currently is exact same as base class, should implement to consider extra info in concrete class
-        string getSummary() const override;
+  ~StandardCommit() override;
+  void displayCommit() const override;
+  // TODO: currently is exact same as base class, should implement to consider
+  // extra info in concrete class
+  string getSummary() const override;
 
-        const map<string, string>& getFileSnapshots() const { return fileSnapshots; };
-        void setFileSnapshots(const map<string, string> &nFileSnapshots) { fileSnapshots = nFileSnapshots; };
+  const map<string, string> &getFileSnapshots() const { return fileSnapshots; };
+  void setFileSnapshots(const map<string, string> &nFileSnapshots) {
+    fileSnapshots = nFileSnapshots;
+  };
 };
 
 #endif // STANDARDCOMMIT_H
